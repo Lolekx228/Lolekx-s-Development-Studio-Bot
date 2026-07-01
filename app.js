@@ -32,12 +32,19 @@ function isAppsScriptUrl(url) { return /^https:\/\/script\.google\.com\/macros\/
 function buildUrl(path) {
   const base = getApiUrl();
   if (!base) throw new Error('API URL is empty');
+
   if (isAppsScriptUrl(base)) {
-    const cleanPath = path.replace(/^\/api\//, '').replace(/^\//, '');
+    const [rawPath, rawQuery = ''] = String(path || '').split('?');
+    const cleanPath = rawPath.replace(/^\/api\//, '').replace(/^\//, '');
     const sep = base.includes('?') ? '&' : '?';
     const key = encodeURIComponent(getApiKey());
-    return `${base}${sep}path=${encodeURIComponent(cleanPath)}&panelKey=${key}`;
+    const query = rawQuery ? `&${rawQuery}` : '';
+
+    // Apps Script receives the API route in path= and all original query params separately.
+    // This is required for guildId/channelId/messageId, otherwise roles/emojis/members cannot load.
+    return `${base}${sep}path=${encodeURIComponent(cleanPath)}&panelKey=${key}${query}`;
   }
+
   return `${base}${path}`;
 }
 async function api(path, options = {}) {
