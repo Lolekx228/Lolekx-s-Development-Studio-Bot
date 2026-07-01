@@ -1,29 +1,23 @@
-LDS Message Studio - Discord-like redesign + Components V2 update
+LDS Message Studio — DeepSeek/Discohook 1:1 style version
 
-Replace on GitHub Pages:
+Что менять на GitHub Pages:
 - github-pages/index.html
 - github-pages/style.css
 - github-pages/app.js
+- github-pages/vendor/*
 
-Replace on bot hosting:
-- bot-host/src/web/apiServer.js -> src/web/apiServer.js
+Что внутри vendor:
+- deepseek-ui.css — исходный большой CSS, который ты скинул
+- coolicons.css — исходный CSS с иконками, который ты скинул
+- highlight-default.css — исходная тема highlight.js, которую ты скинул
 
-Replace in Google Apps Script:
-- google-apps-script/Code.gs
+Картинки и шрифты НЕ переносил.
+В интерфейсе оставлены места:
+- IMAGE #1 — логотип/бренд
+- IMAGE #2 — пустой preview/арт
+- IMAGE #3 — фоновая декорация
 
-After editing Google Apps Script:
-Deploy -> Manage deployments -> Edit -> Version: New version -> Deploy
+Хост бота и Google Apps Script менять не обязательно, если у тебя уже стоит предыдущий фикс с ролями/эмодзи/V2.
+Если хочешь полностью заменить пакет целиком — можешь заменить и файлы google-apps-script/bot-host из архива.
 
-After replacing apiServer.js on the host, restart the bot.
-No npm install and no deploy:commands required for this update.
-
-New features:
-- Interface redesigned closer to Discohook layout.
-- Classic mode: content + embeds + link buttons.
-- Components V2 mode: Container, Text Display, Section + accessory link button, Separator, Media Gallery.
-- Link buttons can be disabled globally and per button.
-- Buttons can have emoji.
-- Server emoji loader through /api/emojis.
-- Unicode/stock emoji helper.
-- User/role mention helpers still work.
-- @everyone and @here are still blocked.
+После загрузки на GitHub Pages нажми Ctrl+F5.
