@@ -1,6 +1,9 @@
-# LDS Message Studio GitHub Pages
+# LDS Message Studio GitHub Pages update
 
-Use this version when the real bot API is HTTP and GitHub Pages blocks it as Mixed Content.
+Replace these files in your GitHub Pages repository:
 
-Put the Google Apps Script Web App URL into **Bot API URL / Apps Script URL**.
-Put your `PANEL_ACCESS_KEY` into **Panel key / password**.
+- `index.html`
+- `style.css`
+- `app.js`
+
+Then refresh the site with Ctrl+F5.

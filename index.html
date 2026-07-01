@@ -45,11 +45,18 @@
       </div>
 
       <details class="helper">
-        <summary>Role mention helper</summary>
-        <div class="row">
-          <button id="loadRoles" class="secondary">Load roles for selected server</button>
+        <summary>Mention helper</summary>
+        <p class="hint">Помощник вставляет правильный Discord-код упоминания. Role mention helper нужен, чтобы выбрать роль из списка и вставить её как &lt;@&amp;role_id&gt;.</p>
+        <div class="row helper-row">
+          <button id="loadRoles" class="secondary">Load roles</button>
           <select id="roleSelect"></select>
           <button id="insertRoleMention" class="secondary">Insert role mention</button>
+        </div>
+        <div class="row helper-row">
+          <input id="memberQuery" placeholder="user name / ID" />
+          <button id="loadMembers" class="secondary">Search users</button>
+          <select id="memberSelect"></select>
+          <button id="insertUserMention" class="secondary">Insert user mention</button>
         </div>
       </details>
 
@@ -68,6 +75,7 @@
       <div class="actions">
         <button id="sendMessage">Send</button>
         <button id="editMessage" class="secondary">Edit bot message</button>
+        <button id="loadMessage" class="secondary">Load bot message</button>
         <input id="editMessageId" placeholder="message ID or message URL" />
       </div>
 

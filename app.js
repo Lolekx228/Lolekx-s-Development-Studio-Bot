@@ -7,6 +7,8 @@ const els = {
   apiKey: $('#apiKey'),
   channelSelect: $('#channelSelect'),
   roleSelect: $('#roleSelect'),
+  memberQuery: $('#memberQuery'),
+  memberSelect: $('#memberSelect'),
   content: $('#content'),
   allowUserPings: $('#allowUserPings'),
   allowRolePings: $('#allowRolePings'),
@@ -203,6 +205,26 @@ async function loadRoles() {
   }
 }
 
+async function loadMembers() {
+  try {
+    const guildId = selectedGuildId();
+    if (!guildId) throw new Error('Select a channel first');
+    const query = els.memberQuery.value.trim();
+    const data = await api(`/api/members?guildId=${encodeURIComponent(guildId)}&query=${encodeURIComponent(query)}`);
+    els.memberSelect.innerHTML = '';
+    for (const member of data.members || []) {
+      const option = document.createElement('option');
+      option.value = member.id;
+      const label = member.displayName || member.globalName || member.username || member.id;
+      option.textContent = `${label} (${member.id})`;
+      els.memberSelect.appendChild(option);
+    }
+    setResult(`Loaded users: ${(data.members || []).length}`, 'ok');
+  } catch (error) {
+    setResult(error.message, 'bad');
+  }
+}
+
 function insertAtCursor(textarea, text) {
   const start = textarea.selectionStart ?? textarea.value.length;
   const end = textarea.selectionEnd ?? textarea.value.length;
@@ -216,6 +238,12 @@ function insertRoleMention() {
   const roleId = els.roleSelect.value;
   if (!roleId) return;
   insertAtCursor(els.content, `<@&${roleId}>`);
+}
+
+function insertUserMention() {
+  const userId = els.memberSelect.value;
+  if (!userId) return;
+  insertAtCursor(els.content, `<@${userId}>`);
 }
 
 function addEmbed(data = {}) {
@@ -374,6 +402,26 @@ function renderEmbedPreview(embed) {
   return `<div class="embed-preview" style="border-left-color:${color}">${author}${title}${desc}${fields}${thumb}${img}${footer}</div>`;
 }
 
+function extractMessageId(value) {
+  const raw = String(value || '').trim();
+  const match = raw.match(/\/(\d{15,25})$/) || raw.match(/(\d{15,25})/);
+  return match ? match[1] : raw;
+}
+
+async function loadMessage() {
+  try {
+    const channelId = els.channelSelect.value;
+    if (!channelId) throw new Error('Select a channel');
+    const messageId = extractMessageId(els.editMessageId.value);
+    if (!messageId) throw new Error('Message ID or URL is empty');
+    const data = await api(`/api/message?channelId=${encodeURIComponent(channelId)}&messageId=${encodeURIComponent(messageId)}`);
+    applyMessage(data.message || {});
+    setResult(`Loaded message: ${data.url || data.messageId}`, 'ok');
+  } catch (error) {
+    setResult(error.message, 'bad');
+  }
+}
+
 async function sendMessage() {
   try {
     const request = buildRequest();
@@ -453,11 +501,14 @@ $('#saveSettings').addEventListener('click', saveSettings);
 $('#testConnection').addEventListener('click', testConnection);
 $('#loadChannels').addEventListener('click', loadChannels);
 $('#loadRoles').addEventListener('click', loadRoles);
+$('#loadMembers').addEventListener('click', loadMembers);
 $('#insertRoleMention').addEventListener('click', insertRoleMention);
+$('#insertUserMention').addEventListener('click', insertUserMention);
 $('#addEmbed').addEventListener('click', () => addEmbed());
 $('#addButton').addEventListener('click', () => addButton());
 $('#sendMessage').addEventListener('click', sendMessage);
 $('#editMessage').addEventListener('click', editMessage);
+$('#loadMessage').addEventListener('click', loadMessage);
 $('#exportJson').addEventListener('click', exportJson);
 $('#importJson').addEventListener('click', importJson);
 $('#saveTemplate').addEventListener('click', saveTemplate);
