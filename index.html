@@ -3,107 +3,162 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LDS Bot Message Studio</title>
+  <title>LDS Message Studio</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <h1>LDS Message Studio</h1>
-      <p>GitHub Pages frontend + bot backend on hosting</p>
-    </div>
-    <div class="status" id="status">Not connected</div>
-  </header>
-
-  <main class="layout">
-    <section class="card settings-card">
-      <h2>Connection</h2>
-      <label>Bot API URL / Apps Script URL</label>
-      <input id="apiUrl" placeholder="https://script.google.com/macros/s/XXXX/exec" />
-      <label>Panel key / password</label>
-      <input id="apiKey" type="password" placeholder="PANEL_ACCESS_KEY" />
-      <div class="row">
-        <button id="saveSettings">Save</button>
-        <button id="testConnection" class="secondary">Test</button>
-        <button id="loadChannels" class="secondary">Load channels</button>
-      </div>
-      <p class="hint">Для GitHub Pages лучше использовать Google Apps Script URL. Panel key хранится только в твоём браузере localStorage.</p>
-    </section>
-
-    <section class="card composer-card">
-      <h2>Message</h2>
-      <label>Channel</label>
-      <select id="channelSelect"></select>
-
-      <label>Content</label>
-      <textarea id="content" rows="5" placeholder="Текст сообщения. Для пинга используй <@user_id> или <@&role_id>."></textarea>
-
-      <div class="toggle-grid">
-        <label class="check"><input id="allowUserPings" type="checkbox" checked /> User pings</label>
-        <label class="check"><input id="allowRolePings" type="checkbox" checked /> Role pings</label>
-        <label class="check muted"><input type="checkbox" disabled /> @everyone/@here blocked</label>
-      </div>
-
-      <details class="helper">
-        <summary>Mention helper</summary>
-        <p class="hint">Помощник вставляет правильный Discord-код упоминания. Role mention helper нужен, чтобы выбрать роль из списка и вставить её как &lt;@&amp;role_id&gt;.</p>
-        <div class="row helper-row">
-          <button id="loadRoles" class="secondary">Load roles</button>
-          <select id="roleSelect"></select>
-          <button id="insertRoleMention" class="secondary">Insert role mention</button>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">L</div>
+        <div>
+          <h1>LDS Studio</h1>
+          <p>Bot message designer</p>
         </div>
-        <div class="row helper-row">
-          <input id="memberQuery" placeholder="user name / ID" />
-          <button id="loadMembers" class="secondary">Search users</button>
-          <select id="memberSelect"></select>
-          <button id="insertUserMention" class="secondary">Insert user mention</button>
+      </div>
+
+      <section class="side-card">
+        <div class="side-title">Connection</div>
+        <label>Apps Script / API URL</label>
+        <input id="apiUrl" placeholder="https://script.google.com/macros/s/.../exec" />
+        <label>Panel key</label>
+        <input id="apiKey" type="password" placeholder="PANEL_ACCESS_KEY" />
+        <div class="mini-actions">
+          <button id="saveSettings">Save</button>
+          <button id="testConnection" class="secondary">Test</button>
         </div>
-      </details>
+        <div class="status" id="status">Not connected</div>
+      </section>
 
-      <div class="split-title">
-        <h3>Embeds</h3>
-        <button id="addEmbed" class="secondary">+ Embed</button>
-      </div>
-      <div id="embeds"></div>
+      <section class="side-card">
+        <div class="side-title">Target</div>
+        <button id="loadChannels" class="wide secondary">Load channels</button>
+        <select id="channelSelect"></select>
+        <p class="hint">Выбери канал, потом можно грузить роли, юзеров и эмодзи сервера.</p>
+      </section>
 
-      <div class="split-title">
-        <h3>Link buttons</h3>
-        <button id="addButton" class="secondary">+ Button</button>
-      </div>
-      <div id="buttons"></div>
+      <section class="side-card compact">
+        <div class="side-title">Message tools</div>
+        <button id="exportJson" class="wide secondary">Export JSON</button>
+        <button id="importJson" class="wide secondary">Import JSON</button>
+        <button id="saveTemplate" class="wide secondary">Save template</button>
+        <button id="loadTemplate" class="wide secondary">Load template</button>
+        <button id="clearAll" class="wide danger">Clear all</button>
+      </section>
+    </aside>
 
-      <div class="actions">
-        <button id="sendMessage">Send</button>
-        <button id="editMessage" class="secondary">Edit bot message</button>
-        <button id="loadMessage" class="secondary">Load bot message</button>
-        <input id="editMessageId" placeholder="message ID or message URL" />
-      </div>
+    <main class="main-grid">
+      <section class="editor-column">
+        <div class="panel-head">
+          <div>
+            <h2>Message editor</h2>
+            <p>Похоже на Discohook, но отправляет от имени твоего бота.</p>
+          </div>
+          <div class="mode-pills">
+            <label><input type="radio" name="messageMode" value="classic" checked /> Classic</label>
+            <label><input type="radio" name="messageMode" value="v2" /> Components V2</label>
+          </div>
+        </div>
 
-      <div class="actions">
-        <button id="exportJson" class="secondary">Export JSON</button>
-        <button id="importJson" class="secondary">Import JSON</button>
-        <button id="saveTemplate" class="secondary">Save template</button>
-        <button id="loadTemplate" class="secondary">Load template</button>
-        <button id="clearAll" class="danger">Clear</button>
-      </div>
+        <section class="editor-card" id="classicCard">
+          <div class="card-title"><span>Content</span><span class="sub">regular message text</span></div>
+          <textarea id="content" rows="5" placeholder="Текст сообщения. Пинги: <@user_id> или <@&role_id>."></textarea>
+          <div class="toggle-grid">
+            <label class="switch"><input id="allowUserPings" type="checkbox" checked /><span>User pings</span></label>
+            <label class="switch"><input id="allowRolePings" type="checkbox" checked /><span>Role pings</span></label>
+            <label class="switch disabled"><input type="checkbox" disabled /><span>@everyone/@here blocked</span></label>
+          </div>
+        </section>
 
-      <textarea id="jsonBox" rows="8" placeholder="Import / Export JSON"></textarea>
-    </section>
+        <section class="editor-card helper-card">
+          <div class="card-title"><span>Mention & emoji helpers</span><span class="sub">roles, users, server emojis, unicode emojis</span></div>
+          <div class="helper-grid">
+            <div class="helper-box">
+              <div class="helper-title">Roles</div>
+              <button id="loadRoles" class="secondary small">Load roles</button>
+              <select id="roleSelect"></select>
+              <button id="insertRoleMention" class="secondary small">Insert role mention</button>
+            </div>
+            <div class="helper-box">
+              <div class="helper-title">Users</div>
+              <input id="memberQuery" placeholder="name / ID" />
+              <button id="loadMembers" class="secondary small">Search users</button>
+              <select id="memberSelect"></select>
+              <button id="insertUserMention" class="secondary small">Insert user mention</button>
+            </div>
+            <div class="helper-box">
+              <div class="helper-title">Emojis</div>
+              <button id="loadEmojis" class="secondary small">Load server emojis</button>
+              <select id="emojiSelect"></select>
+              <select id="unicodeEmojiSelect"></select>
+              <div class="mini-actions">
+                <button id="insertEmoji" class="secondary small">Insert</button>
+                <button id="copyEmoji" class="secondary small">Copy</button>
+              </div>
+            </div>
+          </div>
+        </section>
 
-    <section class="card preview-card">
-      <div class="split-title">
-        <h2>Preview</h2>
-        <button id="refreshPreview" class="secondary">Refresh</button>
-      </div>
-      <div class="discord-preview" id="preview"></div>
-      <div class="result" id="result"></div>
-    </section>
-  </main>
+        <section class="editor-card" id="embedCard">
+          <div class="card-title"><span>Embeds</span><button id="addEmbed" class="secondary small">+ Embed</button></div>
+          <div id="embeds"></div>
+        </section>
+
+        <section class="editor-card" id="v2Card">
+          <div class="card-title"><span>Components V2</span><span class="sub">Text Display / Section / Separator / Media / Container</span></div>
+          <div class="v2-options">
+            <label class="switch"><input id="v2Container" type="checkbox" checked /><span>Use Container</span></label>
+            <label class="switch"><input id="v2ButtonsEnabled" type="checkbox" checked /><span>Use link buttons inside V2</span></label>
+            <label>Accent color <input id="v2AccentColor" type="color" value="#5865f2" /></label>
+          </div>
+          <div class="mini-actions">
+            <button id="addV2Text" class="secondary small">+ Text Display</button>
+            <button id="addV2Section" class="secondary small">+ Section + Button</button>
+            <button id="addV2Separator" class="secondary small">+ Separator</button>
+            <button id="addV2Media" class="secondary small">+ Media</button>
+          </div>
+          <div id="v2Blocks"></div>
+        </section>
+
+        <section class="editor-card">
+          <div class="card-title"><span>Link buttons</span><span class="sub">can be disabled globally or per button</span></div>
+          <label class="switch"><input id="buttonsEnabled" type="checkbox" checked /><span>Enable buttons</span></label>
+          <div class="split-actions"><button id="addButton" class="secondary small">+ Button</button></div>
+          <div id="buttons"></div>
+        </section>
+
+        <section class="editor-card">
+          <div class="card-title"><span>Send / edit</span><span class="sub">only bot messages can be edited</span></div>
+          <div class="action-row">
+            <button id="sendMessage">Send</button>
+            <button id="editMessage" class="secondary">Edit bot message</button>
+            <button id="loadMessage" class="secondary">Load bot message</button>
+          </div>
+          <input id="editMessageId" placeholder="message ID or Discord message URL" />
+          <textarea id="jsonBox" rows="8" placeholder="Import / Export JSON"></textarea>
+          <div class="result" id="result"></div>
+        </section>
+      </section>
+
+      <section class="preview-column">
+        <div class="preview-sticky">
+          <div class="preview-head">
+            <div>
+              <h2>Preview</h2>
+              <p>приближенно к Discord</p>
+            </div>
+            <button id="refreshPreview" class="secondary small">Refresh</button>
+          </div>
+          <div class="discord-preview" id="preview"></div>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <template id="embedTemplate">
-    <div class="embed-editor">
-      <div class="split-title">
-        <h4>Embed</h4>
+    <div class="embed-editor block-card">
+      <div class="block-head">
+        <strong>Embed</strong>
         <button class="danger small remove-embed">Remove</button>
       </div>
       <div class="grid2">
@@ -125,30 +180,40 @@
       <div class="grid3">
         <div><label>Footer text</label><input data-key="footer.text" /></div>
         <div><label>Footer icon URL</label><input data-key="footer.icon_url" placeholder="https://..." /></div>
-        <label class="check timestamp"><input data-key="timestamp" type="checkbox" /> Timestamp</label>
+        <label class="switch timestamp"><input data-key="timestamp" type="checkbox" /> Timestamp</label>
       </div>
-      <div class="split-title">
-        <h4>Fields</h4>
-        <button class="secondary small add-field">+ Field</button>
-      </div>
+      <div class="card-title mini"><span>Fields</span><button class="secondary small add-field">+ Field</button></div>
       <div class="fields"></div>
     </div>
   </template>
 
   <template id="fieldTemplate">
-    <div class="field-editor">
+    <div class="field-editor block-card small-block">
       <div><label>Name</label><input data-field="name" maxlength="256" /></div>
       <div><label>Value</label><textarea data-field="value" rows="2" maxlength="1024"></textarea></div>
-      <label class="check"><input data-field="inline" type="checkbox" /> Inline</label>
+      <label class="switch"><input data-field="inline" type="checkbox" /> Inline</label>
       <button class="danger small remove-field">Remove</button>
     </div>
   </template>
 
   <template id="buttonTemplate">
-    <div class="button-editor">
+    <div class="button-editor block-card small-block">
+      <label class="switch"><input data-button="enabled" type="checkbox" checked /> Enabled</label>
       <div><label>Label</label><input data-button="label" maxlength="80" /></div>
+      <div><label>Emoji</label><input data-button="emoji" placeholder="😀 or <:name:id>" /></div>
       <div><label>URL</label><input data-button="url" placeholder="https://..." /></div>
+      <button class="secondary small use-selected-emoji">Use selected emoji</button>
       <button class="danger small remove-button">Remove</button>
+    </div>
+  </template>
+
+  <template id="v2BlockTemplate">
+    <div class="v2-block block-card" data-v2-type="text">
+      <div class="block-head">
+        <strong class="v2-label">Text Display</strong>
+        <button class="danger small remove-v2">Remove</button>
+      </div>
+      <div class="v2-body"></div>
     </div>
   </template>
 
