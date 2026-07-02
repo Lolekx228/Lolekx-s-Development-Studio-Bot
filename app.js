@@ -576,6 +576,15 @@ function renderMessages() {
   list.innerHTML = '';
   state.messages.forEach((msg, msgIndex) => list.appendChild(renderMessageCard(msg, msgIndex)));
 }
+function scrollToMessageCard(messageId, smooth = true) {
+  requestAnimationFrame(() => {
+    const card = document.querySelector(`[data-message-id=\"${String(messageId).replace(/\"/g, '')}\"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'center' });
+    card.classList.add('just-added');
+    setTimeout(() => card.classList.remove('just-added'), 1400);
+  });
+}
 function renderMessageCard(msg, msgIndex) {
   const card = document.createElement('article');
   card.className = `message-card ${msg.open ? '' : 'collapsed'} ${msg.id === state.activeMessageId ? 'active' : ''}`.trim();
@@ -904,10 +913,13 @@ function openAddMessageModal() {
   </div>`, [{ label: 'Закрыть', run: closeModal }]);
   $$('[data-choice]').forEach((card) => card.addEventListener('click', () => {
     const msg = createMessage(card.dataset.choice === 'v2' ? 'v2' : 'v1');
-    state.messages.push(msg);
+    const activeIndex = state.messages.findIndex((item) => item.id === state.activeMessageId);
+    const insertAt = activeIndex >= 0 ? activeIndex + 1 : state.messages.length;
+    state.messages.splice(insertAt, 0, msg);
     state.activeMessageId = msg.id;
     closeModal();
     rerenderAfterStructureChange();
+    scrollToMessageCard(msg.id);
   }));
 }
 function openJsonModal() {

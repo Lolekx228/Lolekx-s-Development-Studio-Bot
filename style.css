@@ -83,6 +83,8 @@ input[type="color"] { padding: 2px; height: 38px; }
 
 .message-card { border: 1px solid #30333a; background: linear-gradient(180deg, #24262b, #1f2025); border-radius: 12px; overflow: hidden; }
 .message-card.active { border-color: rgba(88,101,242,.75); box-shadow: 0 0 0 2px rgba(88,101,242,.13); }
+.message-card.just-added { animation: message-pop 1.35s ease; }
+@keyframes message-pop { 0%, 100% { box-shadow: 0 0 0 2px rgba(88,101,242,.13); } 25% { box-shadow: 0 0 0 4px rgba(88,101,242,.38), 0 0 34px rgba(88,101,242,.24); } }
 .card-head { min-height: 46px; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 10px 9px 13px; background: #26282e; border-bottom: 1px solid #30333a; }
 .head-left { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .drag-dot { color: #777f8d; font-size: 16px; }
