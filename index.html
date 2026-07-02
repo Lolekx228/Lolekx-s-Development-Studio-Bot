@@ -11,74 +11,82 @@
     <form id="loginForm" class="login-card">
       <div class="login-mark">L</div>
       <h1>LDS Message Studio</h1>
-      <p>Чёрная Discohook-like панель отправки сообщений от лица бота.</p>
-      <input id="apiBaseInput" type="url" placeholder="Google Apps Script URL или API URL">
-      <input id="passwordInput" type="password" placeholder="Panel password / PANEL_ACCESS_KEY" autocomplete="current-password">
-      <button type="submit" class="btn primary wide">Войти</button>
+      <p>Discohook-like панель для сообщений от лица бота через Google Apps Script или WEB API.</p>
+      <label>API URL<input id="apiBaseInput" type="url" placeholder="https://script.google.com/macros/s/.../exec"></label>
+      <label>Panel password / key<input id="passwordInput" type="password" placeholder="PANEL_ACCESS_KEY или WEB_API_KEY" autocomplete="current-password"></label>
+      <button type="submit" class="btn primary wide">Подключиться</button>
       <div id="loginError" class="error-line"></div>
     </form>
   </div>
 
   <div class="app-shell hidden" id="appView">
     <header class="topbar">
-      <div class="top-tabs">
-        <button id="settingsBtn" class="btn secondary" type="button">Настройки</button>
-        <button id="historyBtn" class="btn secondary" type="button">История</button>
+      <div class="top-left">
+        <button class="brand-button" type="button">L</button>
+        <div>
+          <div class="brand-title">LDS Message Studio</div>
+          <div class="brand-sub"><span id="botTag">Offline</span> · black Discohook-like editor</div>
+        </div>
       </div>
-      <div class="brand-area">
-        <div class="brand-title">LDS Message Studio</div>
-        <div class="brand-sub"><span id="botTag">Loading...</span> · black panel</div>
-      </div>
-    </header>
-
-    <div class="actionbar">
-      <div class="action-row">
-        <button id="shareBtn" class="btn secondary" type="button">Поделиться</button>
+      <div class="top-actions">
+        <button id="settingsBtn" class="btn secondary" type="button">Target</button>
+        <button id="jsonBtn" class="btn secondary" type="button">JSON</button>
         <button id="backupsBtn" class="btn secondary" type="button">Бэкапы</button>
-        <button id="resetBtn" class="btn secondary" type="button">Очистить Всё</button>
-      </div>
-      <div class="action-row">
-        <button id="addWebhookBtn" class="btn primary" type="button">Добавить вебхук</button>
+        <button id="resetBtn" class="btn secondary" type="button">Reset</button>
         <span class="send-group">
-          <button id="sendBtn" class="btn primary" type="button">Отправить</button>
+          <button id="sendBtn" class="btn primary" type="button">Send</button>
           <button id="sendMenuBtn" class="btn primary icon" type="button">⌄</button>
         </span>
         <button class="btn secondary mobile-only" id="previewBtn" type="button">Preview</button>
       </div>
-    </div>
+    </header>
 
     <main class="studio" id="studioView">
       <section class="editor-pane" id="editorPane">
-        <div id="targetSection" class="panel-block hidden-soft">
-          <div class="section-title-line">
-            <h3>Настройки отправки</h3>
+        <section id="targetSection" class="panel-block target-block">
+          <div class="section-line">
+            <div>
+              <h2>Target</h2>
+              <p>Канал, режим отправки и загрузка существующих сообщений.</p>
+            </div>
+            <button id="refreshChannelsBtn" class="btn secondary small" type="button">Обновить каналы</button>
           </div>
           <div class="target-grid">
-            <button id="refreshChannelsBtn" class="btn secondary" type="button">Обновить каналы</button>
             <label>Канал<select id="channelSelect"></select></label>
+            <label>Message ID / URL для редактирования<input id="editMessageInput" placeholder="оставь пустым для новой отправки"></label>
           </div>
-          <label>Редактировать сообщение (опционально)<input id="editMessageInput" placeholder="Message ID или ссылка на сообщение"></label>
+          <div class="target-actions">
+            <button id="loadMessageBtn" class="btn secondary" type="button">Загрузить сообщение</button>
+            <button id="shareBtn" class="btn secondary" type="button">Скопировать проект</button>
+            <button id="historyBtn" class="btn secondary" type="button">История</button>
+          </div>
           <div class="status" id="statusLine"></div>
+        </section>
+
+        <div class="editor-headline">
+          <div>
+            <h1>Messages</h1>
+            <p>V1 — обычное сообщение. V2 — Components V2: text/section/media/separator + link buttons.</p>
+          </div>
+          <button id="addMessageBtn" class="btn primary" type="button">＋ Добавить сообщение</button>
         </div>
 
         <div id="messageList" class="message-list"></div>
-        <button id="addMessageBtn" class="wide-add" type="button">💬 Добавить сообщение</button>
       </section>
 
       <section class="preview-pane" id="previewPane">
         <div class="preview-head">
-          <button class="btn secondary mobile-only" id="editorBtn" type="button">Редактор</button>
+          <button class="btn secondary mobile-only" id="editorBtn" type="button">Editor</button>
           <div>
             <strong>Preview</strong>
             <span id="previewChannel">No channel selected</span>
           </div>
-          <button id="refreshPreview" class="btn small secondary" type="button">Обновить</button>
+          <button id="refreshPreview" class="btn small secondary" type="button">Refresh</button>
         </div>
         <div class="preview-scroll">
           <div class="discord-shell">
-            <div class="discord-preview" id="previewMessagesWrap">
-              <div class="message-preview empty-preview">Нет данных для предпросмотра.</div>
-            </div>
+            <div class="discord-channel-head"><span>#</span><strong>message-preview</strong></div>
+            <div class="discord-preview" id="previewMessagesWrap"></div>
           </div>
         </div>
       </section>
@@ -87,9 +95,10 @@
 
   <div class="dropdown" id="floatingMenu" aria-hidden="true"></div>
   <div class="dropdown" id="sendDropdown" aria-hidden="true">
-    <button type="button" data-send-action="send">📨 Send / edit</button>
-    <button type="button" data-send-action="copy">📋 Copy payload</button>
-    <button type="button" data-send-action="download">⬇️ Download JSON</button>
+    <button type="button" data-send-action="send-active">📨 Отправить активное</button>
+    <button type="button" data-send-action="send-all">📚 Отправить все</button>
+    <button type="button" data-send-action="copy-payload">📋 Copy API payload</button>
+    <button type="button" data-send-action="download-project">⬇️ Download project JSON</button>
   </div>
 
   <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">

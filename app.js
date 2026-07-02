@@ -1,25 +1,54 @@
 const $ = (id) => document.getElementById(id);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-const BACKUP_KEY = 'lds_black_panel_backups_v2';
-const HISTORY_KEY = 'lds_black_panel_history_v2';
-const TEMPLATE_KEY = 'lds_black_panel_templates_v2';
+const STORE = {
+  apiBase: 'lds_api_base',
+  apiKey: 'lds_api_key',
+  authMode: 'lds_auth_mode',
+  project: 'lds_project_discohook_rework_v1',
+  backups: 'lds_backups_discohook_rework_v1',
+  history: 'lds_history_discohook_rework_v1',
+};
 
 const state = {
   bot: null,
-  guilds: [],
+  channels: [],
+  apiBase: localStorage.getItem(STORE.apiBase) || '',
+  apiKey: localStorage.getItem(STORE.apiKey) || '',
+  authMode: localStorage.getItem(STORE.authMode) || '',
+  activeMessageId: '',
   messages: [],
-  activeMessageId: null,
-  apiBase: localStorage.getItem('lds_api_base') || (location.protocol === 'file:' ? 'http://localhost:13579' : ''),
-  apiKey: localStorage.getItem('lds_api_key') || '',
-  authMode: localStorage.getItem('lds_auth_mode') || '',
 };
 
-function uid(prefix = 'id') {
-  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+const LIMITS = {
+  messages: 10,
+  embeds: 10,
+  fields: 25,
+  buttons: 25,
+  buttonsPerRow: 5,
+  v2Blocks: 40,
+};
+
+function id(prefix = 'id') {
+  return `${prefix}_${Math.random().toString(36).slice(2, 9)}_${Date.now().toString(36).slice(-4)}`;
+}
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch]));
+}
+function normalizeColor(value, fallback = '#5865f2') {
+  const raw = String(value ?? '').trim();
+  const hex = raw.startsWith('#') ? raw.slice(1) : raw;
+  return /^[0-9a-f]{6}$/i.test(hex) ? `#${hex.toLowerCase()}` : fallback;
+}
+function isUrl(value) {
+  return /^https?:\/\//i.test(String(value || '').trim());
+}
+function truncate(value, limit) {
+  const text = String(value ?? '');
+  return text.length > limit ? text.slice(0, limit) : text;
 }
 function notify(text, kind = '') {
   if (!text) return;
@@ -27,28 +56,83 @@ function notify(text, kind = '') {
   toast.className = `toast ${kind}`.trim();
   toast.textContent = text;
   $('toastWrap').appendChild(toast);
-  setTimeout(() => toast.remove(), 3200);
+  setTimeout(() => toast.remove(), 3600);
 }
-function setStatus(text = '', good = true) {
+function setStatus(text = '', ok = true) {
   const el = $('statusLine');
+  if (!el) return;
   el.textContent = text;
-  el.className = `status ${text ? (good ? 'ok' : 'bad') : ''}`.trim();
-  if (text) notify(text, good ? 'good' : 'bad');
+  el.className = `status ${text ? (ok ? 'ok' : 'bad') : ''}`.trim();
+  if (text) notify(text, ok ? 'good' : 'bad');
 }
+function closeMenus() {
+  $('floatingMenu').classList.remove('show');
+  $('sendDropdown').classList.remove('show');
+}
+function showMenu(anchor, items) {
+  closeMenus();
+  const menu = $('floatingMenu');
+  menu.innerHTML = '';
+  for (const item of items) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = item.label;
+    btn.addEventListener('click', () => { closeMenus(); item.run(); });
+    menu.appendChild(btn);
+  }
+  const rect = anchor.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 6}px`;
+  menu.style.left = `${Math.min(Math.max(8, rect.left), window.innerWidth - 240)}px`;
+  menu.classList.add('show');
+}
+function openModal(title, bodyHtml, actions = []) {
+  $('modalTitle').textContent = title;
+  $('modalBody').innerHTML = bodyHtml;
+  $('modalActions').innerHTML = '';
+  for (const action of actions) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `btn ${action.className || 'secondary'}`.trim();
+    btn.textContent = action.label;
+    btn.addEventListener('click', action.run);
+    $('modalActions').appendChild(btn);
+  }
+  $('modalBackdrop').classList.add('show');
+  $('modalBackdrop').setAttribute('aria-hidden', 'false');
+}
+function closeModal() {
+  $('modalBackdrop').classList.remove('show');
+  $('modalBackdrop').setAttribute('aria-hidden', 'true');
+}
+async function copyText(text, ok = 'Скопировано') {
+  try { await navigator.clipboard.writeText(text); setStatus(ok); }
+  catch { setStatus('Не удалось скопировать в буфер.', false); }
+}
+function downloadText(name, text) {
+  const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function isAppsScriptProxy(base = state.apiBase) {
   const value = String(base || '').toLowerCase();
   return value.includes('script.google.com/macros/') || value.includes('script.googleusercontent.com/macros/') || value.includes('/macros/s/');
 }
 function splitApiPath(path) {
-  const raw = String(path || 'health');
-  const [cleanPath, queryString = ''] = raw.split('?');
+  const raw = String(path || '/api/health');
+  const [cleanPath, query = ''] = raw.split('?');
   const apiPath = cleanPath.replace(/^\/+/, '').replace(/^api\//i, '') || 'health';
-  const params = new URLSearchParams(queryString);
+  const params = new URLSearchParams(query);
   return { apiPath, params };
 }
 function apiUrl(path) {
-  const baseRaw = String(state.apiBase || '').trim();
-  const base = baseRaw.replace(/\/$/, '');
+  const base = String(state.apiBase || '').trim().replace(/\/+$/, '');
   if (!base) return path;
   if (isAppsScriptProxy(base)) {
     const { apiPath, params } = splitApiPath(path);
@@ -59,12 +143,12 @@ function apiUrl(path) {
   return `${base}${path}`;
 }
 async function api(path, options = {}) {
-  const gasMode = isAppsScriptProxy();
+  const gas = isAppsScriptProxy();
   const method = String(options.method || 'GET').toUpperCase();
-  const headers = gasMode
+  const headers = gas
     ? (method === 'POST' ? { 'Content-Type': 'text/plain;charset=utf-8' } : {})
     : { 'Content-Type': 'application/json', ...(options.headers || {}) };
-  if (!gasMode && state.apiKey) {
+  if (!gas && state.apiKey) {
     headers['X-Web-Api-Key'] = state.apiKey;
     headers.Authorization = `Bearer ${state.apiKey}`;
   }
@@ -74,1107 +158,732 @@ async function api(path, options = {}) {
     headers,
   });
   const raw = await response.text();
-  let data = null;
+  let data;
   try { data = raw ? JSON.parse(raw) : {}; }
   catch {
-    const sample = raw.slice(0, 120).replace(/\s+/g, ' ').trim();
+    const sample = raw.slice(0, 140).replace(/\s+/g, ' ').trim();
     throw new Error(sample ? `Bad response: ${sample}` : `Bad response: HTTP ${response.status}`);
   }
   if (!response.ok || data.ok === false) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
 }
+
 function createEmbed() {
   return {
-    id: uid('embed'),
-    open: true,
-    authorName: '', authorIcon: '', authorUrl: '',
+    id: id('embed'), open: true,
+    author: { name: '', url: '', icon_url: '' },
     title: '', url: '', color: '#5865f2', description: '',
-    fields: [], image: '', thumbnail: '',
-    footerText: '', footerIcon: '', timestamp: false,
+    fields: [], image_url: '', thumbnail_url: '',
+    footer: { text: '', icon_url: '' }, timestamp: false,
   };
 }
-function createField() {
-  return { id: uid('field'), name: '', value: '', inline: false };
+function createField() { return { id: id('field'), name: '', value: '', inline: false }; }
+function createButton() { return { id: id('btn'), enabled: true, label: 'Link', url: '', emoji: '' }; }
+function createV2Block(type = 'text') {
+  if (type === 'section') return { id: id('block'), type, open: true, text: '', button: createButton() };
+  if (type === 'media') return { id: id('block'), type, open: true, url: '' };
+  if (type === 'separator') return { id: id('block'), type, open: true, divider: true, spacing: 1 };
+  return { id: id('block'), type: 'text', open: true, text: '' };
 }
-function createV1Row() {
-  return { id: uid('row'), open: true, items: [] };
-}
-function createV1Message() {
+function createMessage(type = 'v1') {
   return {
-    id: uid('msg'),
-    type: 'v1',
-    open: true,
-    title: '',
+    id: id('msg'), type, open: true,
+    name: '', avatarUrl: '', threadName: '',
     content: '',
-    threadName: '',
-    threadId: '',
-    profileName: '',
-    profileAvatar: '',
-    files: [],
-    embeds: [],
-    rows: [],
-    pings: { users: true, roles: true },
+    allowUserPings: true, allowRolePings: true,
+    buttonsEnabled: true,
+    embeds: [], buttons: [],
+    useV2: type === 'v2',
+    v2: { enabled: type === 'v2', container: true, accentColor: '#5865f2', blocks: type === 'v2' ? [createV2Block('text')] : [] },
   };
 }
-function createV2Message() {
+function hydrateMessage(raw) {
+  const msg = { ...createMessage(raw?.useV2 || raw?.type === 'v2' || raw?.v2?.enabled ? 'v2' : 'v1'), ...(raw || {}) };
+  msg.id = msg.id || id('msg');
+  msg.type = msg.type || (msg.useV2 || msg.v2?.enabled ? 'v2' : 'v1');
+  msg.open = msg.open !== false;
+  msg.allowUserPings = msg.allowUserPings !== false;
+  msg.allowRolePings = msg.allowRolePings !== false;
+  msg.buttonsEnabled = msg.buttonsEnabled !== false;
+  msg.embeds = Array.isArray(msg.embeds) ? msg.embeds.map((e) => ({ ...createEmbed(), ...e, id: e.id || id('embed'), open: e.open !== false, author: { name: '', url: '', icon_url: '', ...(e.author || {}) }, footer: { text: '', icon_url: '', ...(e.footer || {}) }, fields: Array.isArray(e.fields) ? e.fields.map((f) => ({ ...createField(), ...f, id: f.id || id('field') })) : [] })) : [];
+  msg.buttons = Array.isArray(msg.buttons) ? msg.buttons.map((b) => ({ ...createButton(), ...b, id: b.id || id('btn'), enabled: b.enabled !== false })) : [];
+  msg.v2 = { container: true, accentColor: '#5865f2', blocks: [], ...(msg.v2 || {}) };
+  msg.v2.enabled = msg.type === 'v2' || msg.useV2 || msg.v2.enabled;
+  msg.v2.blocks = Array.isArray(msg.v2.blocks) ? msg.v2.blocks.map((b) => ({ ...createV2Block(b.type || 'text'), ...b, id: b.id || id('block'), open: b.open !== false, button: b.button ? { ...createButton(), ...b.button, id: b.button.id || id('btn') } : (b.type === 'section' ? createButton() : undefined) })) : [];
+  return msg;
+}
+function activeMessage() { return state.messages.find((m) => m.id === state.activeMessageId) || state.messages[0] || null; }
+function setActive(idValue) { state.activeMessageId = idValue; saveProjectDebounced(); renderMessages(); renderPreview(); }
+function saveProject() {
+  localStorage.setItem(STORE.project, JSON.stringify(projectData()));
+}
+let saveTimer = null;
+function saveProjectDebounced() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveProject, 250);
+}
+function projectData() {
   return {
-    id: uid('msg'),
-    type: 'v2',
-    open: true,
-    threadName: '',
-    threadId: '',
-    profileName: '',
-    profileAvatar: '',
-    files: [],
-    parts: [],
-    pings: { users: true, roles: true },
-  };
-}
-function createContentPart() {
-  return { id: uid('part'), type: 'content', open: true, text: '', accessory: null };
-}
-function createContainerPart() {
-  return { id: uid('part'), type: 'container', open: true, embeds: [createEmbed()], parts: [] };
-}
-function createMediaGalleryPart() {
-  return { id: uid('part'), type: 'media', open: true, urls: [''] };
-}
-function createFilePart() {
-  return { id: uid('part'), type: 'file', open: true, filename: '', url: '' };
-}
-function createSeparatorPart() {
-  return { id: uid('part'), type: 'separator', open: true, spacing: 'small', divider: true };
-}
-function createRowPart() {
-  return { id: uid('part'), type: 'row', open: true, items: [] };
-}
-function createComponent(type) {
-  return {
-    id: uid('cmp'), type,
-    label: '', url: '', placeholder: '', customId: '',
-  };
-}
-function currentMessage() {
-  return state.messages.find((m) => m.id === state.activeMessageId) || state.messages[0] || null;
-}
-function prettyComponentType(type) {
-  return {
-    button: 'Кнопка',
-    link: 'Кнопка с Ссылкой',
-    select: 'Меню Выбора',
-    userSelect: 'Меню Выбора Пользователей',
-    roleSelect: 'Меню Выбора Ролей',
-    mentionableSelect: 'Меню Выбора Пользователей и Ролей',
-    channelSelect: 'Меню Выбора Каналов',
-  }[type] || type;
-}
-
-function cloneEmbedDeep(embed) {
-  const c = structuredClone(embed);
-  c.id = uid('embed');
-  c.fields = (c.fields || []).map((f) => ({ ...f, id: uid('field') }));
-  return c;
-}
-function cloneRowDeep(row) {
-  const c = structuredClone(row);
-  c.id = uid('row');
-  c.items = (c.items || []).map((i) => ({ ...i, id: uid('cmp') }));
-  return c;
-}
-function clonePartDeep(part) {
-  const c = structuredClone(part);
-  c.id = uid('part');
-  if (c.type === 'container') {
-    c.embeds = (c.embeds || []).map(cloneEmbedDeep);
-    c.parts = (c.parts || []).map(clonePartDeep);
-  }
-  if (c.type === 'row') {
-    c.items = (c.items || []).map((i) => ({ ...i, id: uid('cmp') }));
-  }
-  if (c.type === 'content' && c.accessory) c.accessory = { ...c.accessory, id: uid('cmp') };
-  return c;
-}
-function cloneMessageDeep(message) {
-  const c = structuredClone(message);
-  c.id = uid('msg');
-  c.files = (c.files || []).map((f) => ({ ...f }));
-  if (c.type === 'v1') {
-    c.embeds = (c.embeds || []).map(cloneEmbedDeep);
-    c.rows = (c.rows || []).map(cloneRowDeep);
-  } else {
-    c.parts = (c.parts || []).map(clonePartDeep);
-  }
-  return c;
-}
-
-function prettyPartType(type) {
-  return {
-    content: 'Содержимое',
-    container: 'Container',
-    media: 'Media Gallery',
-    file: 'Файл',
-    separator: 'Разделитель',
-    row: 'Строка',
-  }[type] || type;
-}
-
-function renderAll() {
-  if (!state.messages.length) {
-    const msg = createV1Message();
-    state.messages = [msg];
-    state.activeMessageId = msg.id;
-  }
-  renderMessages();
-  renderPreview();
-}
-
-function renderMessages() {
-  const wrap = $('messageList');
-  wrap.innerHTML = '';
-  state.messages.forEach((message, index) => {
-    const card = document.createElement('div');
-    card.className = `message-card ${message.open ? '' : 'collapsed'}`.trim();
-    card.dataset.messageId = message.id;
-
-    const header = document.createElement('div');
-    header.className = 'message-header';
-    const left = document.createElement('div');
-    left.className = 'message-left';
-    left.innerHTML = `<span class="chev">⌄</span><span>Сообщение ${index + 1}</span>${message.type === 'v2' ? '<span class="pill-type">V2</span>' : ''}`;
-    const tools = document.createElement('div');
-    tools.className = 'message-tools';
-    tools.innerHTML = `
-      <button class="icon-btn" data-action="editMessage" title="Выбрать">✎</button>
-      <button class="icon-btn" data-action="duplicateMessage" title="Дублировать">⧉</button>
-      <button class="icon-btn" data-action="deleteMessage" title="Удалить">🗑</button>
-    `;
-    header.append(left, tools);
-    header.addEventListener('click', (event) => {
-      if (event.target.closest('.icon-btn')) return;
-      message.open = !message.open;
-      state.activeMessageId = message.id;
-      renderAll();
-    });
-
-    const body = document.createElement('div');
-    body.className = 'message-body';
-
-    if (message.type === 'v1') body.appendChild(renderV1Message(message, index));
-    else body.appendChild(renderV2Message(message, index));
-
-    card.append(header, body);
-    wrap.appendChild(card);
-  });
-}
-
-function renderV1Message(message, index) {
-  const root = document.createElement('div');
-  root.className = 'message-v1';
-
-  const contentSection = document.createElement('div');
-  contentSection.className = 'message-pad';
-  contentSection.innerHTML = `
-    <div class="counter-line">Содержимое <span>${message.content.length}/2000</span></div>
-    <textarea data-bind="content" data-message-id="${message.id}" placeholder="Введите содержимое сообщения"></textarea>
-    <div class="switch-row" style="margin-top:10px">
-      ${switchMarkup(`pingUsers_${message.id}`, 'Пинги пользователей', message.pings.users)}
-      ${switchMarkup(`pingRoles_${message.id}`, 'Пинги ролей', message.pings.roles)}
-    </div>
-  `;
-  contentSection.querySelector('textarea').value = message.content;
-
-  const subs = document.createElement('div');
-  subs.className = 'subsection-list';
-  subs.append(
-    createFoldSection('Ветка', `
-      <div class="help-line">Вебхук могут создавать и использовать ветки. <a href="#">Как мне использовать это?</a></div>
-      <label class="fieldline">Название Ветки Форума <span class="small-note">${message.threadName.length}/100</span><input data-bind="threadName" data-message-id="${message.id}" maxlength="100"></label>
-      <label class="fieldline">ID Ветки <span class="small-note">${message.threadId.length}/30</span><input data-bind="threadId" data-message-id="${message.id}" maxlength="30"></label>
-    `),
-    createFoldSection('Профиль', `
-      <label class="fieldline">Имя <span class="small-note">${message.profileName.length}/80</span><input data-bind="profileName" data-message-id="${message.id}" maxlength="80"></label>
-      <label class="fieldline">Ссылка на Аватар<input data-bind="profileAvatar" data-message-id="${message.id}"></label>
-    `),
-    createFoldSection(`Файлы (${message.files.length}/10)`, `
-      <div class="controls-row"><button class="btn primary small" data-action="addMockFile" data-message-id="${message.id}">Добавить Файл</button><button class="btn secondary small" data-action="pasteFile" data-message-id="${message.id}">Вставить Файл</button></div>
-      <div class="help-line">Characters: 0/4000</div>
-      ${(message.files || []).map((file, i) => `<div class="field-card"><div class="field-card-top"><strong>${escapeHtml(file.name || `file_${i+1}.png`)}</strong><button class="btn danger small" data-action="removeFile" data-message-id="${message.id}" data-index="${i}">Удалить</button></div><label>URL файла<input data-file-bind="url" data-message-id="${message.id}" data-index="${i}" value="${escapeHtml(file.url || '')}"></label></div>`).join('')}
-    `)
-  );
-
-  const embedList = document.createElement('div');
-  message.embeds.forEach((embed, embedIndex) => embedList.appendChild(renderEmbedCard(message, embed, embedIndex)));
-  const rowList = document.createElement('div');
-  message.rows.forEach((row, rowIndex) => rowList.appendChild(renderRowCard(message, row, rowIndex, false)));
-
-  const footer = document.createElement('div');
-  footer.className = 'card-footer-row';
-  footer.innerHTML = `
-    <button class="btn primary" data-action="addV1" data-message-id="${message.id}">Добавить ⌄</button>
-    <button class="btn secondary" data-action="setLink" data-message-id="${message.id}">Set Link</button>
-    <button class="btn secondary" data-action="messageOptions" data-message-id="${message.id}">Опции ⌄</button>
-  `;
-
-  root.append(contentSection, subs, embedList, rowList, footer);
-  return root;
-}
-
-function renderV2Message(message, index) {
-  const root = document.createElement('div');
-  root.className = 'message-v2';
-
-  const subs = document.createElement('div');
-  subs.className = 'subsection-list';
-  subs.append(
-    createFoldSection('Ветка', `
-      <div class="help-line">Вебхук могут создавать и использовать ветки. <a href="#">Как мне использовать это?</a></div>
-      <label class="fieldline">Название Ветки Форума <span class="small-note">${message.threadName.length}/100</span><input data-bind="threadName" data-message-id="${message.id}" maxlength="100"></label>
-      <label class="fieldline">ID Ветки <span class="small-note">${message.threadId.length}/30</span><input data-bind="threadId" data-message-id="${message.id}" maxlength="30"></label>
-    `),
-    createFoldSection('Профиль', `
-      <label class="fieldline">Имя <span class="small-note">${message.profileName.length}/80</span><input data-bind="profileName" data-message-id="${message.id}" maxlength="80"></label>
-      <label class="fieldline">Ссылка на Аватар<input data-bind="profileAvatar" data-message-id="${message.id}"></label>
-    `),
-    createFoldSection(`Файлы (${message.files.length}/10)`, `<div class="controls-row"><button class="btn primary small" data-action="addMockFile" data-message-id="${message.id}">Добавить Файл</button></div>`) 
-  );
-
-  const partList = document.createElement('div');
-  (message.parts || []).forEach((part, partIndex) => partList.appendChild(renderV2PartCard(message, part, partIndex)));
-
-  const footer = document.createElement('div');
-  footer.className = 'card-footer-row';
-  footer.innerHTML = `
-    <button class="btn primary" data-action="addV2" data-message-id="${message.id}">Добавить ⌄</button>
-    <button class="btn secondary" data-action="setLink" data-message-id="${message.id}">Set Link</button>
-    <button class="btn secondary" data-action="messageOptions" data-message-id="${message.id}">Опции ⌄</button>
-  `;
-
-  root.append(subs, partList, footer);
-  return root;
-}
-
-function switchMarkup(id, label, checked) {
-  return `<label class="switch"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''}><span class="switch-track"></span><span>${label}</span></label>`;
-}
-function createFoldSection(title, innerHtml) {
-  const section = document.createElement('div');
-  section.className = 'message-section collapsed';
-  section.innerHTML = `
-    <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>${title}</strong></div></div>
-    <div class="section-body">${innerHtml}</div>
-  `;
-  section.querySelector('.section-head').addEventListener('click', () => section.classList.toggle('collapsed'));
-  return section;
-}
-
-function renderEmbedCard(message, embed, embedIndex) {
-  const card = document.createElement('div');
-  card.className = `embed-card ${embed.open ? '' : 'collapsed'}`.trim();
-  card.dataset.embedId = embed.id;
-  card.innerHTML = `
-    <div class="embed-head">
-      <div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Embed ${embedIndex + 1}</strong></div>
-      <div class="embed-tools">
-        <button class="icon-btn" data-action="duplicateEmbed" data-message-id="${message.id}" data-embed-id="${embed.id}">⧉</button>
-        <button class="icon-btn" data-action="deleteEmbed" data-message-id="${message.id}" data-embed-id="${embed.id}">🗑</button>
-      </div>
-    </div>
-    <div class="embed-body">
-      <div class="warning-box">Должен содержать текст или вложения</div>
-      <div class="section-card collapsed">
-        <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Автор</strong></div><div class="meta">Имя 0/256</div></div>
-        <div class="section-body input-grid-2">
-          <label>Имя<input data-embed-bind="authorName" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.authorName)}"></label>
-          <label>Icon<input data-embed-bind="authorIcon" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.authorIcon)}"></label>
-          <label style="grid-column:1/-1">URL<input data-embed-bind="authorUrl" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.authorUrl)}"></label>
-        </div>
-      </div>
-      <div class="section-card">
-        <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Тело</strong></div><div class="meta">Заголовок ${embed.title.length}/256</div></div>
-        <div class="section-body">
-          <div class="input-grid-3">
-            <label>Заголовок<input data-embed-bind="title" data-message-id="${message.id}" data-embed-id="${embed.id}" maxlength="256" value="${escapeHtml(embed.title)}"></label>
-            <label>URL<input data-embed-bind="url" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.url)}"></label>
-            <label>Цвет<input type="color" data-embed-bind="color" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.color || '#5865f2')}"></label>
-          </div>
-          <label style="margin-top:10px">Описание ${embed.description.length}/4096<textarea data-embed-bind="description" data-message-id="${message.id}" data-embed-id="${embed.id}" rows="5">${escapeHtml(embed.description)}</textarea></label>
-        </div>
-      </div>
-      <div class="section-card collapsed">
-        <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Поля</strong></div><button class="btn primary small" data-action="addField" data-message-id="${message.id}" data-embed-id="${embed.id}">Добавить Поле</button></div>
-        <div class="section-body"></div>
-      </div>
-      <div class="section-card collapsed">
-        <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Изображения</strong></div></div>
-        <div class="section-body input-grid-2">
-          <label>Ссылка на основное изображение<input data-embed-bind="image" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.image)}"></label>
-          <label>Ссылка на Миниатюру<input data-embed-bind="thumbnail" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.thumbnail)}"></label>
-        </div>
-      </div>
-      <div class="section-card collapsed">
-        <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Футер</strong></div><div class="meta">Текст ${embed.footerText.length}/2048</div></div>
-        <div class="section-body input-grid-2">
-          <label>Текст<input data-embed-bind="footerText" data-message-id="${message.id}" data-embed-id="${embed.id}" maxlength="2048" value="${escapeHtml(embed.footerText)}"></label>
-          <label>Icon<input data-embed-bind="footerIcon" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.footerIcon)}"></label>
-          <div style="grid-column:1/-1">${switchMarkup(`timestamp_${embed.id}`, 'Дата', embed.timestamp)}</div>
-        </div>
-      </div>
-    </div>
-  `;
-  card.querySelector('.embed-head').addEventListener('click', (event) => {
-    if (event.target.closest('.icon-btn') || event.target.closest('.btn')) return;
-    embed.open = !embed.open; renderAll();
-  });
-  card.querySelectorAll('.section-card .section-head').forEach((head) => {
-    head.addEventListener('click', (event) => {
-      if (event.target.closest('.btn')) return;
-      head.parentElement.classList.toggle('collapsed');
-    });
-  });
-  const fieldsBody = card.querySelectorAll('.section-card .section-body')[1];
-  embed.fields.forEach((field, i) => {
-    const fieldCard = document.createElement('div');
-    fieldCard.className = 'field-card';
-    fieldCard.innerHTML = `
-      <div class="field-card-top"><span class="mini-title">Поле ${i + 1}</span><button class="btn danger small" data-action="deleteField" data-message-id="${message.id}" data-embed-id="${embed.id}" data-field-id="${field.id}">Удалить</button></div>
-      <div class="field-grid">
-        <label>Имя<input data-field-bind="name" data-message-id="${message.id}" data-embed-id="${embed.id}" data-field-id="${field.id}" maxlength="256" value="${escapeHtml(field.name)}"></label>
-        <label>Значение<input data-field-bind="value" data-message-id="${message.id}" data-embed-id="${embed.id}" data-field-id="${field.id}" maxlength="1024" value="${escapeHtml(field.value)}"></label>
-        ${switchMarkup(`inline_${field.id}`, 'Inline', field.inline)}
-      </div>
-    `;
-    fieldsBody.appendChild(fieldCard);
-  });
-  return card;
-}
-
-function renderRowCard(message, row, rowIndex, isV2, parentPart = null) {
-  const card = document.createElement('div');
-  card.className = `row-card ${row.open ? '' : 'collapsed'}`.trim();
-  card.innerHTML = `
-    <div class="row-head">
-      <div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Строка ${rowIndex + 1}</strong></div>
-      <div class="row-tools">
-        <button class="icon-btn" data-action="duplicateRow" data-message-id="${message.id}" data-row-id="${row.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''}>⧉</button>
-        <button class="icon-btn" data-action="deleteRow" data-message-id="${message.id}" data-row-id="${row.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''}>🗑</button>
-      </div>
-    </div>
-    <div class="row-body">
-      ${row.items.length ? '' : '<div class="warning-box">Должен содержать как минимум один компонент (кнопку/выбор)</div>'}
-      <div class="controls-row" style="margin-bottom:10px"><button class="btn primary" data-action="addRowComponent" data-message-id="${message.id}" data-row-id="${row.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''}>Добавить Компонент ⌄</button></div>
-    </div>
-  `;
-  card.querySelector('.row-head').addEventListener('click', (event) => {
-    if (event.target.closest('.icon-btn') || event.target.closest('.btn')) return;
-    row.open = !row.open; renderAll();
-  });
-  const body = card.querySelector('.row-body');
-  row.items.forEach((item) => body.appendChild(renderComponentItem(message, row, item, isV2, parentPart)));
-  return card;
-}
-
-function renderComponentItem(message, row, item, isV2, parentPart) {
-  const box = document.createElement('div');
-  box.className = 'field-card';
-  const isLink = item.type === 'link';
-  const placeholderLabel = ['select','userSelect','roleSelect','mentionableSelect','channelSelect'].includes(item.type) ? 'Placeholder' : 'Custom ID';
-  box.innerHTML = `
-    <div class="field-card-top"><span class="mini-title">${prettyComponentType(item.type)}</span><button class="btn danger small" data-action="deleteComponent" data-message-id="${message.id}" data-row-id="${row.id}" data-component-id="${item.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''}>Удалить</button></div>
-    <div class="field-grid">
-      <label>Label<input data-component-bind="label" data-message-id="${message.id}" data-row-id="${row.id}" data-component-id="${item.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''} value="${escapeHtml(item.label)}"></label>
-      ${isLink ? `<label>URL<input data-component-bind="url" data-message-id="${message.id}" data-row-id="${row.id}" data-component-id="${item.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''} value="${escapeHtml(item.url)}"></label>` : `<label>${placeholderLabel}<input data-component-bind="customId" data-message-id="${message.id}" data-row-id="${row.id}" data-component-id="${item.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''} value="${escapeHtml(item.customId || item.placeholder || '')}"></label>`}
-    </div>
-  `;
-  return box;
-}
-
-function renderV2PartCard(message, part, partIndex) {
-  const card = document.createElement('div');
-  card.className = `part-card ${part.open ? '' : 'collapsed'}`.trim();
-  const label = `${prettyPartType(part.type)} ${partIndex + 1}`;
-  card.innerHTML = `
-    <div class="part-head">
-      <div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>${label}</strong></div>
-      <div class="part-tools">
-        <button class="icon-btn" data-action="duplicatePart" data-message-id="${message.id}" data-part-id="${part.id}">⧉</button>
-        <button class="icon-btn" data-action="deletePart" data-message-id="${message.id}" data-part-id="${part.id}">🗑</button>
-      </div>
-    </div>
-    <div class="part-body"></div>
-  `;
-  card.querySelector('.part-head').addEventListener('click', (event) => {
-    if (event.target.closest('.icon-btn') || event.target.closest('.btn')) return;
-    part.open = !part.open; renderAll();
-  });
-  const body = card.querySelector('.part-body');
-
-  if (part.type === 'content') {
-    body.innerHTML = `
-      <div class="counter-line">Содержимое <span>${part.text.length}/4000</span></div>
-      <textarea data-v2-bind="text" data-message-id="${message.id}" data-part-id="${part.id}" rows="4" placeholder="Введите текст блока">${escapeHtml(part.text)}</textarea>
-      <div class="help-line" style="margin-top:8px">Accessory</div>
-      <div class="controls-row"><button class="btn primary small" data-action="addAccessory" data-message-id="${message.id}" data-part-id="${part.id}">Add Accessory ⌄</button></div>
-    `;
-    if (part.accessory) {
-      const acc = document.createElement('div');
-      acc.className = 'field-card';
-      acc.innerHTML = `
-        <div class="field-card-top"><span class="mini-title">${prettyComponentType(part.accessory.type)}</span><button class="btn danger small" data-action="removeAccessory" data-message-id="${message.id}" data-part-id="${part.id}">Удалить</button></div>
-        <label>Label<input data-accessory-bind="label" data-message-id="${message.id}" data-part-id="${part.id}" value="${escapeHtml(part.accessory.label || '')}"></label>
-        ${part.accessory.type === 'link' ? `<label>URL<input data-accessory-bind="url" data-message-id="${message.id}" data-part-id="${part.id}" value="${escapeHtml(part.accessory.url || '')}"></label>` : ''}
-      `;
-      body.appendChild(acc);
-    }
-  }
-  if (part.type === 'container') {
-    const embedWrap = document.createElement('div');
-    part.embeds.forEach((embed, idx) => embedWrap.appendChild(renderEmbedCard(message, embed, idx)));
-    body.appendChild(embedWrap);
-    const rows = document.createElement('div');
-    (part.parts || []).forEach((sub, idx) => {
-      if (sub.type === 'row') rows.appendChild(renderRowCard(message, sub, idx, true, part));
-      if (sub.type === 'content') rows.appendChild(renderV2PartCard(message, sub, idx));
-    });
-    body.appendChild(rows);
-    const controls = document.createElement('div');
-    controls.className = 'controls-row';
-    controls.innerHTML = `<button class="btn primary small" data-action="addContainerThing" data-message-id="${message.id}" data-part-id="${part.id}">Добавить ⌄</button>`;
-    body.appendChild(controls);
-  }
-  if (part.type === 'media') {
-    body.innerHTML = `<div class="help-line">Ссылки на медиа</div>`;
-    part.urls.forEach((url, i) => {
-      const el = document.createElement('label');
-      el.className = 'fieldline';
-      el.innerHTML = `Media URL ${i + 1}<input data-media-bind="url" data-message-id="${message.id}" data-part-id="${part.id}" data-index="${i}" value="${escapeHtml(url)}">`;
-      body.appendChild(el);
-    });
-    const add = document.createElement('button'); add.className = 'btn primary small'; add.textContent = 'Добавить Media'; add.dataset.action = 'addMediaUrl'; add.dataset.messageId = message.id; add.dataset.partId = part.id; body.appendChild(add);
-  }
-  if (part.type === 'file') {
-    body.innerHTML = `
-      <label class="fieldline">Имя файла<input data-filepart-bind="filename" data-message-id="${message.id}" data-part-id="${part.id}" value="${escapeHtml(part.filename)}"></label>
-      <label class="fieldline">Ссылка на файл<input data-filepart-bind="url" data-message-id="${message.id}" data-part-id="${part.id}" value="${escapeHtml(part.url)}"></label>
-    `;
-  }
-  if (part.type === 'separator') {
-    body.innerHTML = `
-      <div class="switch-row">${switchMarkup(`divider_${part.id}`, 'Divider', part.divider)}</div>
-      <label class="fieldline">Spacing<select data-separator-bind="spacing" data-message-id="${message.id}" data-part-id="${part.id}"><option value="small">small</option><option value="large">large</option></select></label>
-    `;
-    body.querySelector('select').value = part.spacing;
-  }
-  if (part.type === 'row') {
-    return renderRowCard(message, part, partIndex, true, null);
-  }
-  return card;
-}
-
-function buildProject() {
-  return {
-    channelId: $('channelSelect').value || '',
-    editMessage: $('editMessageInput').value || '',
-    messages: state.messages,
+    version: 2,
+    channelId: $('channelSelect')?.value || '',
+    editMessage: $('editMessageInput')?.value || '',
     activeMessageId: state.activeMessageId,
+    messages: state.messages,
   };
 }
 function applyProject(project = {}) {
-  $('editMessageInput').value = project.editMessage || '';
-  if (project.channelId) $('channelSelect').value = project.channelId;
-  state.messages = Array.isArray(project.messages) && project.messages.length ? project.messages : [createV1Message()];
-  state.activeMessageId = project.activeMessageId || state.messages[0].id;
-  renderAll();
+  if ($('channelSelect') && project.channelId) $('channelSelect').value = project.channelId;
+  if ($('editMessageInput')) $('editMessageInput').value = project.editMessage || '';
+  state.messages = Array.isArray(project.messages) && project.messages.length ? project.messages.map(hydrateMessage) : [createMessage('v1')];
+  state.activeMessageId = project.activeMessageId && state.messages.some((m) => m.id === project.activeMessageId) ? project.activeMessageId : state.messages[0].id;
+  renderMessages();
+  renderPreview();
+  saveProject();
 }
-function buildSendPayload(message) {
-  if (!message) return { channelId: '', content: '', embeds: [], buttons: [] };
-  const linkButtons = [];
-  const pullRows = (rows = []) => rows.forEach((row) => (row.items || []).forEach((item) => { if (item.type === 'link' && item.label && item.url) linkButtons.push({ label: item.label, url: item.url }); }));
-  if (message.type === 'v1') {
-    pullRows(message.rows);
-    return {
-      channelId: $('channelSelect').value,
-      editMessage: $('editMessageInput').value,
-      content: message.content || '',
-      pings: message.pings || { users: true, roles: true },
-      embeds: (message.embeds || []).map(packEmbed),
-      buttons: linkButtons,
-    };
-  }
-  let content = '';
-  const embeds = [];
-  (message.parts || []).forEach((part) => {
-    if (part.type === 'content') content += `${part.text || ''}\n`;
-    if (part.type === 'container') {
-      (part.embeds || []).forEach((embed) => embeds.push(packEmbed(embed)));
-      pullRows((part.parts || []).filter((x) => x.type === 'row'));
-    }
-    if (part.type === 'row') pullRows([part]);
-  });
-  return {
-    channelId: $('channelSelect').value,
-    editMessage: $('editMessageInput').value,
-    content: content.trim(),
-    pings: message.pings || { users: true, roles: true },
-    embeds,
-    buttons: linkButtons,
-  };
-}
-function packEmbed(embed) {
-  return {
-    title: embed.title || '',
-    description: embed.description || '',
-    url: embed.url || '',
-    color: embed.color || '#5865f2',
-    timestamp: Boolean(embed.timestamp),
-    author: { name: embed.authorName || '', url: embed.authorUrl || '', icon_url: embed.authorIcon || '' },
-    footer: { text: embed.footerText || '', icon_url: embed.footerIcon || '' },
-    thumbnail: { url: embed.thumbnail || '' },
-    image: { url: embed.image || '' },
-    fields: (embed.fields || []).map((field) => ({ name: field.name || '', value: field.value || '', inline: Boolean(field.inline) })),
-  };
+function loadSavedProject() {
+  try {
+    const raw = localStorage.getItem(STORE.project);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
 }
 
-function renderPreview() {
-  const wrap = $('previewMessagesWrap');
-  wrap.innerHTML = '';
-  const channelName = $('channelSelect').selectedOptions[0]?.textContent || 'No channel selected';
-  $('previewChannel').textContent = channelName;
-  const botName = state.bot?.username || state.bot?.tag || 'Discohook';
-  const avatar = state.bot?.avatarUrl || '';
-  if (!state.messages.length) {
-    wrap.innerHTML = '<div class="message-preview empty-preview">Нет данных для предпросмотра.</div>';
+function toApiMessage(message) {
+  const output = {
+    content: truncate(message.content, 2000),
+    allowUserPings: Boolean(message.allowUserPings),
+    allowRolePings: Boolean(message.allowRolePings),
+    buttonsEnabled: message.buttonsEnabled !== false,
+    buttons: (message.buttons || []).slice(0, LIMITS.buttons).map((button) => ({
+      enabled: button.enabled !== false,
+      label: truncate(button.label, 80),
+      url: button.url,
+      emoji: button.emoji || '',
+    })),
+  };
+  if (message.type === 'v2' || message.useV2 || message.v2?.enabled) {
+    output.useV2 = true;
+    output.embeds = [];
+    output.v2 = {
+      enabled: true,
+      container: message.v2?.container !== false,
+      accentColor: normalizeColor(message.v2?.accentColor || '#5865f2'),
+      buttonsEnabled: message.buttonsEnabled !== false,
+      blocks: (message.v2?.blocks || []).slice(0, LIMITS.v2Blocks).map((block) => {
+        if (block.type === 'section') return { type: 'section', text: truncate(block.text, 4000), button: block.button };
+        if (block.type === 'media') return { type: 'media', url: block.url };
+        if (block.type === 'separator') return { type: 'separator', divider: block.divider !== false, spacing: Number(block.spacing) === 2 ? 2 : 1 };
+        return { type: 'text', text: truncate(block.text, 4000) };
+      }),
+    };
+    return output;
+  }
+  output.useV2 = false;
+  output.embeds = (message.embeds || []).slice(0, LIMITS.embeds).map((embed) => ({
+    title: truncate(embed.title, 256),
+    url: embed.url,
+    color: normalizeColor(embed.color || '#5865f2'),
+    description: truncate(embed.description, 4096),
+    timestamp: Boolean(embed.timestamp),
+    author: {
+      name: truncate(embed.author?.name, 256),
+      url: embed.author?.url || '',
+      icon_url: embed.author?.icon_url || '',
+    },
+    footer: {
+      text: truncate(embed.footer?.text, 2048),
+      icon_url: embed.footer?.icon_url || '',
+    },
+    image_url: embed.image_url || '',
+    thumbnail_url: embed.thumbnail_url || '',
+    fields: (embed.fields || []).slice(0, LIMITS.fields).map((field) => ({ name: truncate(field.name, 256), value: truncate(field.value, 1024), inline: Boolean(field.inline) })),
+  }));
+  return output;
+}
+function channelId() { return $('channelSelect')?.value || ''; }
+function editMessageValue() { return $('editMessageInput')?.value.trim() || ''; }
+function validateApiMessage(message) {
+  const apiMsg = toApiMessage(message);
+  if (apiMsg.useV2) {
+    const hasBlocks = (apiMsg.v2.blocks || []).some((b) => b.text || b.url || b.type === 'separator');
+    const hasButtons = (apiMsg.buttons || []).some((b) => b.enabled !== false && b.label && isUrl(b.url));
+    if (!hasBlocks && !hasButtons && !apiMsg.content) return 'V2-сообщение пустое.';
+    return '';
+  }
+  const hasContent = apiMsg.content.trim();
+  const hasEmbeds = apiMsg.embeds.some((e) => e.title || e.description || e.author.name || e.footer.text || e.image_url || e.thumbnail_url || e.fields.length);
+  const hasButtons = apiMsg.buttons.some((b) => b.enabled !== false && b.label && isUrl(b.url));
+  return hasContent || hasEmbeds || hasButtons ? '' : 'Сообщение пустое.';
+}
+async function sendOne(message, edit = false) {
+  const error = validateApiMessage(message);
+  if (error) throw new Error(error);
+  const body = { channelId: channelId(), message: toApiMessage(message) };
+  if (edit) {
+    body.messageId = editMessageValue();
+    return api('/api/edit', { method: 'POST', body: JSON.stringify(body) });
+  }
+  return api('/api/send', { method: 'POST', body: JSON.stringify(body) });
+}
+async function sendActiveOrEdit() {
+  const msg = activeMessage();
+  if (!channelId()) return setStatus('Выбери канал.', false);
+  if (!msg) return setStatus('Нет активного сообщения.', false);
+  const editing = Boolean(editMessageValue());
+  if (editing && state.messages.length > 1 && !confirm('Редактирование применится только к активному сообщению. Продолжить?')) return;
+  await sendWithButton(async () => {
+    const result = await sendOne(msg, editing);
+    pushHistory({ type: editing ? 'edit' : 'send', at: new Date().toISOString(), url: result.url || '', project: projectData() });
+    setStatus(`${editing ? 'Изменено' : 'Отправлено'}: ${result.url || result.messageId || 'ok'}`);
+  });
+}
+async function sendAll() {
+  if (!channelId()) return setStatus('Выбери канал.', false);
+  if (editMessageValue()) return setStatus('Для отправки всех сообщений очисти поле редактирования.', false);
+  await sendWithButton(async () => {
+    const urls = [];
+    for (const msg of state.messages) {
+      const result = await sendOne(msg, false);
+      urls.push(result.url || result.messageId || 'ok');
+    }
+    pushHistory({ type: 'send-all', at: new Date().toISOString(), url: urls[0] || '', project: projectData() });
+    setStatus(`Отправлено сообщений: ${urls.length}`);
+  });
+}
+async function sendWithButton(task) {
+  const btn = $('sendBtn');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  try { await task(); }
+  catch (error) { setStatus(error.message || String(error), false); }
+  finally { btn.disabled = false; btn.textContent = old; }
+}
+function pushHistory(entry) {
+  const items = readJson(STORE.history, []);
+  items.unshift(entry);
+  localStorage.setItem(STORE.history, JSON.stringify(items.slice(0, 30)));
+}
+function readJson(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); }
+  catch { return fallback; }
+}
+
+function renderChannels() {
+  const select = $('channelSelect');
+  select.innerHTML = '';
+  const channels = state.channels || [];
+  if (!channels.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No sendable channels';
+    select.appendChild(option);
     return;
   }
-  state.messages.forEach((message) => {
-    const msg = document.createElement('div');
-    msg.className = 'discord-message';
-    msg.innerHTML = `
-      <img class="preview-avatar" src="${escapeHtml(message.profileAvatar || avatar)}" alt="avatar">
-      <div class="message-main">
-        <div class="message-headline"><span class="username">${escapeHtml(message.profileName || botName)}</span><span class="bot-tag">BOT</span><span class="timestamp">${new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span></div>
-        <div class="message-render"></div>
-      </div>
-    `;
-    const render = msg.querySelector('.message-render');
-    if (message.threadName) {
-      const thread = document.createElement('div'); thread.className = 'preview-thread'; thread.textContent = `Ветка: ${message.threadName}`; render.appendChild(thread);
+  const groups = new Map();
+  for (const channel of channels) {
+    const groupName = channel.guildName || channel.guild?.name || 'Server';
+    if (!groups.has(groupName)) {
+      const group = document.createElement('optgroup');
+      group.label = groupName;
+      groups.set(groupName, group);
+      select.appendChild(group);
     }
-    if (message.type === 'v1') renderPreviewV1(message, render);
-    else renderPreviewV2(message, render);
-    wrap.appendChild(msg);
-  });
-}
-function renderPreviewV1(message, render) {
-  const content = document.createElement('div');
-  content.className = `preview-content ${message.content.trim() ? '' : 'empty'}`.trim();
-  content.textContent = message.content.trim() || ' '; render.appendChild(content);
-  (message.files || []).forEach((file) => { const el = document.createElement('div'); el.className = 'preview-file'; el.textContent = file.name || 'Файл'; render.appendChild(el); });
-  (message.embeds || []).forEach((embed) => render.appendChild(createPreviewEmbed(embed)));
-  (message.rows || []).forEach((row) => {
-    const pr = document.createElement('div'); pr.className = 'preview-row';
-    (row.items || []).forEach((item) => {
-      const el = document.createElement('div'); el.className = `preview-button ${item.type === 'link' ? 'link' : ''}`.trim(); el.textContent = item.label || prettyComponentType(item.type); pr.appendChild(el);
-    });
-    if (pr.childNodes.length) render.appendChild(pr);
-  });
-}
-function renderPreviewV2(message, render) {
-  if (!(message.parts || []).length) {
-    const empty = document.createElement('div'); empty.className = 'preview-content empty'; empty.textContent = ' '; render.appendChild(empty); return;
+    const option = document.createElement('option');
+    option.value = channel.id;
+    option.textContent = channel.label ? channel.label.replace(`${groupName} / `, '') : `#${channel.name || channel.id}`;
+    option.dataset.guildId = channel.guildId || '';
+    groups.get(groupName).appendChild(option);
   }
-  (message.parts || []).forEach((part) => {
-    if (part.type === 'content') {
-      const content = document.createElement('div'); content.className = 'preview-content'; content.textContent = part.text || ' '; render.appendChild(content);
-      if (part.accessory) {
-        const acc = document.createElement('div'); acc.className = 'preview-accessories';
-        const el = document.createElement('div'); el.className = `preview-button ${part.accessory.type === 'link' ? 'link' : ''}`.trim(); el.textContent = part.accessory.label || prettyComponentType(part.accessory.type); acc.appendChild(el); render.appendChild(acc);
-      }
-    }
-    if (part.type === 'container') {
-      (part.embeds || []).forEach((embed) => render.appendChild(createPreviewEmbed(embed)));
-      (part.parts || []).forEach((sub) => {
-        if (sub.type === 'row') {
-          const pr = document.createElement('div'); pr.className = 'preview-row';
-          (sub.items || []).forEach((item) => { const el = document.createElement('div'); el.className = `preview-button ${item.type === 'link' ? 'link' : ''}`.trim(); el.textContent = item.label || prettyComponentType(item.type); pr.appendChild(el); });
-          if (pr.childNodes.length) render.appendChild(pr);
-        }
-      });
-    }
-    if (part.type === 'media') {
-      const pr = document.createElement('div'); pr.className = 'preview-accessories';
-      (part.urls || []).filter(Boolean).forEach(() => { const el = document.createElement('div'); el.className = 'preview-file'; el.textContent = 'Media'; pr.appendChild(el); });
-      if (pr.childNodes.length) render.appendChild(pr);
-    }
-    if (part.type === 'file') {
-      const pr = document.createElement('div'); pr.className = 'preview-file'; pr.textContent = part.filename || 'Файл'; render.appendChild(pr);
-    }
-    if (part.type === 'separator') {
-      const sep = document.createElement('div'); sep.className = 'preview-separator'; render.appendChild(sep);
-    }
-    if (part.type === 'row') {
-      const pr = document.createElement('div'); pr.className = 'preview-row';
-      (part.items || []).forEach((item) => { const el = document.createElement('div'); el.className = `preview-button ${item.type === 'link' ? 'link' : ''}`.trim(); el.textContent = item.label || prettyComponentType(item.type); pr.appendChild(el); });
-      if (pr.childNodes.length) render.appendChild(pr);
-    }
-  });
 }
-function createPreviewEmbed(embed) {
-  const wrap = document.createElement('div'); wrap.className = 'preview-embed';
-  wrap.innerHTML = `<div class="embed-stripe" style="background:${escapeHtml(embed.color || '#5865f2')}"></div><div class="embed-inner"></div>`;
+function selectedChannelName() {
+  const option = $('channelSelect')?.selectedOptions?.[0];
+  return option ? option.textContent : 'No channel selected';
+}
+function currentGuildId() {
+  return $('channelSelect')?.selectedOptions?.[0]?.dataset.guildId || '';
+}
+
+function switchHtml(path, checked, label) {
+  return `<label class="switch"><input type="checkbox" data-path="${path}" ${checked ? 'checked' : ''}><span class="switch-track"></span><span>${escapeHtml(label)}</span></label>`;
+}
+function inputHtml(path, value, placeholder = '', attrs = '') {
+  return `<input data-path="${path}" value="${escapeHtml(value || '')}" placeholder="${escapeHtml(placeholder)}" ${attrs}>`;
+}
+function textAreaHtml(path, value, placeholder = '', rows = 4, attrs = '') {
+  return `<textarea data-path="${path}" rows="${rows}" placeholder="${escapeHtml(placeholder)}" ${attrs}>${escapeHtml(value || '')}</textarea>`;
+}
+function colorHtml(path, value) {
+  return `<input type="color" data-path="${path}" value="${escapeHtml(normalizeColor(value || '#5865f2'))}">`;
+}
+function countText(value, max) { return `${String(value || '').length}/${max}`; }
+function fold(title, body, options = {}) {
+  const collapsed = options.open === false ? 'collapsed' : '';
+  const actions = options.actions || '';
+  const sub = options.sub ? `<span class="fold-sub">${escapeHtml(options.sub)}</span>` : '';
+  return `<section class="fold ${collapsed}" data-fold>
+    <div class="fold-head" data-toggle-fold><div class="fold-head-left"><button class="collapse-btn" type="button">›</button><span class="fold-title">${title}</span>${sub}</div><div class="inline-row">${actions}</div></div>
+    <div class="fold-body">${body}</div>
+  </section>`;
+}
+function miniCard(title, body, actions = '', open = true) {
+  return `<div class="mini-card ${open ? '' : 'collapsed'}" data-mini>
+    <div class="mini-head" data-toggle-mini><div class="mini-head-left"><button class="collapse-btn" type="button">›</button><span class="mini-title">${title}</span></div><div class="inline-row">${actions}</div></div>
+    <div class="mini-body">${body}</div>
+  </div>`;
+}
+function renderMessages() {
+  const list = $('messageList');
+  list.innerHTML = '';
+  state.messages.forEach((msg, msgIndex) => list.appendChild(renderMessageCard(msg, msgIndex)));
+}
+function renderMessageCard(msg, msgIndex) {
+  const card = document.createElement('article');
+  card.className = `message-card ${msg.open ? '' : 'collapsed'} ${msg.id === state.activeMessageId ? 'active' : ''}`.trim();
+  card.dataset.messageId = msg.id;
+  const typeLabel = msg.type === 'v2' ? 'Components V2' : 'Standard';
+  card.innerHTML = `
+    <div class="card-head" data-set-active>
+      <div class="head-left">
+        <span class="drag-dot">⋮⋮</span>
+        <button class="collapse-btn" type="button" data-action="toggle-message">›</button>
+        <span class="card-title">Сообщение ${msgIndex + 1}</span>
+        <span class="pill">${typeLabel}</span>
+      </div>
+      <div class="card-actions">
+        <button class="icon-btn" type="button" data-action="move-message-up" title="Выше">↑</button>
+        <button class="icon-btn" type="button" data-action="move-message-down" title="Ниже">↓</button>
+        <button class="icon-btn" type="button" data-action="duplicate-message" title="Дублировать">⧉</button>
+        <button class="icon-btn" type="button" data-action="delete-message" title="Удалить">🗑</button>
+      </div>
+    </div>
+    <div class="card-body">${msg.type === 'v2' ? renderV2Editor(msg, msgIndex) : renderV1Editor(msg, msgIndex)}</div>
+  `;
+  return card;
+}
+function renderBaseSections(msg, i) {
+  const base = `messages.${i}`;
+  return [
+    fold('Профиль', `<div class="grid-2"><label>Имя вебхука${inputHtml(`${base}.name`, msg.name, 'Bot name')}</label><label>Аватар URL${inputHtml(`${base}.avatarUrl`, msg.avatarUrl, 'https://...')}</label></div>`, { open: false }),
+    fold('Ветка', `<label>Название ветки${inputHtml(`${base}.threadName`, msg.threadName, 'Forum thread name')}</label>`, { open: false }),
+    fold('Allowed mentions', `<div class="inline-row">${switchHtml(`${base}.allowUserPings`, msg.allowUserPings, 'User pings')}${switchHtml(`${base}.allowRolePings`, msg.allowRolePings, 'Role pings')}</div><p class="small-muted">@everyone и @here сервер всё равно экранирует.</p>`, { open: false }),
+  ].join('');
+}
+function renderV1Editor(msg, i) {
+  const base = `messages.${i}`;
+  const content = `<label>Content ${countText(msg.content, 2000)}${textAreaHtml(`${base}.content`, msg.content, 'Введите текст сообщения', 7, 'maxlength="2000"')}</label>`;
+  const embeds = renderEmbeds(msg, i);
+  const buttons = renderButtons(msg, i);
+  return `${renderBaseSections(msg, i)}${fold('Содержимое', content, { open: true })}${fold('Embeds', embeds, { open: true, actions: `<button class="btn small primary" type="button" data-action="add-embed">＋ Embed</button>` })}${fold('Link buttons', buttons, { open: true, actions: `<button class="btn small primary" type="button" data-action="add-button">＋ Button</button>` })}`;
+}
+function renderV2Editor(msg, i) {
+  const base = `messages.${i}`;
+  const settings = `<div class="grid-2"><label>Accent color${colorHtml(`${base}.v2.accentColor`, msg.v2.accentColor)}</label><div class="inline-row" style="align-self:end">${switchHtml(`${base}.v2.container`, msg.v2.container !== false, 'Wrap in container')}${switchHtml(`${base}.buttonsEnabled`, msg.buttonsEnabled !== false, 'Buttons enabled')}</div></div>`;
+  const blocks = renderV2Blocks(msg, i);
+  const buttons = renderButtons(msg, i);
+  return `${renderBaseSections(msg, i)}${fold('V2 Settings', settings, { open: true })}${fold('Components V2', blocks, { open: true, actions: `<button class="btn small primary" type="button" data-action="add-v2-block">＋ Add</button>` })}${fold('Link buttons', buttons, { open: true, actions: `<button class="btn small primary" type="button" data-action="add-button">＋ Button</button>` })}`;
+}
+function renderEmbeds(msg, i) {
+  if (!msg.embeds.length) return '<div class="empty-box">Embeds пока нет. Нажми “+ Embed”.</div>';
+  return `<div class="field-list">${msg.embeds.map((embed, eIndex) => renderEmbed(msg, i, embed, eIndex)).join('')}</div>`;
+}
+function renderEmbed(msg, i, embed, eIndex) {
+  const base = `messages.${i}.embeds.${eIndex}`;
+  const actions = `<button class="icon-btn" type="button" data-action="move-embed-up" data-embed-index="${eIndex}">↑</button><button class="icon-btn" type="button" data-action="move-embed-down" data-embed-index="${eIndex}">↓</button><button class="icon-btn" type="button" data-action="duplicate-embed" data-embed-index="${eIndex}">⧉</button><button class="icon-btn" type="button" data-action="delete-embed" data-embed-index="${eIndex}">🗑</button>`;
+  const fields = (embed.fields || []).length ? embed.fields.map((field, fIndex) => {
+    const fbase = `${base}.fields.${fIndex}`;
+    return `<div class="field-card"><div class="inline-row" style="justify-content:space-between"><strong>Field ${fIndex + 1}</strong><div class="inline-row"><button class="btn small secondary" type="button" data-action="move-field-up" data-embed-index="${eIndex}" data-field-index="${fIndex}">↑</button><button class="btn small secondary" type="button" data-action="move-field-down" data-embed-index="${eIndex}" data-field-index="${fIndex}">↓</button><button class="btn small danger" type="button" data-action="delete-field" data-embed-index="${eIndex}" data-field-index="${fIndex}">Delete</button></div></div><div class="grid-2"><label>Name ${countText(field.name, 256)}${inputHtml(`${fbase}.name`, field.name, 'Field name', 'maxlength="256"')}</label><label>Value ${countText(field.value, 1024)}${inputHtml(`${fbase}.value`, field.value, 'Field value', 'maxlength="1024"')}</label></div>${switchHtml(`${fbase}.inline`, field.inline, 'Inline')}</div>`;
+  }).join('') : '<div class="empty-box">Поля отсутствуют.</div>';
+  const body = `
+    <div class="grid-3"><label>Title ${countText(embed.title, 256)}${inputHtml(`${base}.title`, embed.title, 'Embed title', 'maxlength="256"')}</label><label>URL${inputHtml(`${base}.url`, embed.url, 'https://...')}</label><label>Color${colorHtml(`${base}.color`, embed.color)}</label></div>
+    <label>Description ${countText(embed.description, 4096)}${textAreaHtml(`${base}.description`, embed.description, 'Embed description', 5, 'maxlength="4096"')}</label>
+    ${miniCard('Author', `<div class="grid-3"><label>Name${inputHtml(`${base}.author.name`, embed.author.name, 'Author')}</label><label>URL${inputHtml(`${base}.author.url`, embed.author.url, 'https://...')}</label><label>Icon URL${inputHtml(`${base}.author.icon_url`, embed.author.icon_url, 'https://...')}</label></div>`, '', false)}
+    ${miniCard('Images', `<div class="grid-2"><label>Image URL${inputHtml(`${base}.image_url`, embed.image_url, 'https://...')}</label><label>Thumbnail URL${inputHtml(`${base}.thumbnail_url`, embed.thumbnail_url, 'https://...')}</label></div>`, '', false)}
+    ${miniCard('Fields', `<div class="field-list">${fields}</div><button class="btn small primary" type="button" data-action="add-field" data-embed-index="${eIndex}">＋ Add field</button>`, '', false)}
+    ${miniCard('Footer', `<div class="grid-2"><label>Text ${countText(embed.footer.text, 2048)}${inputHtml(`${base}.footer.text`, embed.footer.text, 'Footer', 'maxlength="2048"')}</label><label>Icon URL${inputHtml(`${base}.footer.icon_url`, embed.footer.icon_url, 'https://...')}</label></div>${switchHtml(`${base}.timestamp`, embed.timestamp, 'Timestamp')}`, '', false)}
+  `;
+  return miniCard(`Embed ${eIndex + 1}`, body, actions, embed.open !== false);
+}
+function renderButtons(msg, i) {
+  const base = `messages.${i}`;
+  const toggle = `<div class="inline-row">${switchHtml(`${base}.buttonsEnabled`, msg.buttonsEnabled !== false, 'Buttons enabled')}</div>`;
+  if (!msg.buttons.length) return `${toggle}<div class="empty-box">URL-кнопки пока не добавлены. Сервер сейчас отправляет только link-buttons.</div>`;
+  return `${toggle}<div class="field-list">${msg.buttons.map((button, bIndex) => {
+    const bbase = `${base}.buttons.${bIndex}`;
+    return `<div class="button-row-card"><div class="inline-row" style="justify-content:space-between"><strong>Button ${bIndex + 1}</strong><div class="inline-row"><button class="btn small secondary" type="button" data-action="move-button-up" data-button-index="${bIndex}">↑</button><button class="btn small secondary" type="button" data-action="move-button-down" data-button-index="${bIndex}">↓</button><button class="btn small danger" type="button" data-action="delete-button" data-button-index="${bIndex}">Delete</button></div></div><div class="grid-3"><label>Label ${countText(button.label, 80)}${inputHtml(`${bbase}.label`, button.label, 'Open', 'maxlength="80"')}</label><label>URL${inputHtml(`${bbase}.url`, button.url, 'https://...')}</label><label>Emoji${inputHtml(`${bbase}.emoji`, button.emoji, '🔥 или <:name:id>')}</label></div>${switchHtml(`${bbase}.enabled`, button.enabled !== false, 'Enabled')}</div>`;
+  }).join('')}</div>`;
+}
+function renderV2Blocks(msg, i) {
+  const blocks = msg.v2.blocks || [];
+  if (!blocks.length) return '<div class="empty-box">V2-блоков пока нет. Нажми “+ Add”.</div>';
+  return `<div class="field-list">${blocks.map((block, blockIndex) => renderV2Block(msg, i, block, blockIndex)).join('')}</div>`;
+}
+function renderV2Block(msg, i, block, blockIndex) {
+  const base = `messages.${i}.v2.blocks.${blockIndex}`;
+  const actions = `<button class="icon-btn" type="button" data-action="move-v2-up" data-block-index="${blockIndex}">↑</button><button class="icon-btn" type="button" data-action="move-v2-down" data-block-index="${blockIndex}">↓</button><button class="icon-btn" type="button" data-action="duplicate-v2" data-block-index="${blockIndex}">⧉</button><button class="icon-btn" type="button" data-action="delete-v2" data-block-index="${blockIndex}">🗑</button>`;
+  let body = '';
+  if (block.type === 'section') {
+    body = `<label>Text ${countText(block.text, 4000)}${textAreaHtml(`${base}.text`, block.text, 'Section text', 4, 'maxlength="4000"')}</label><div class="grid-3"><label>Accessory label${inputHtml(`${base}.button.label`, block.button?.label, 'Open')}</label><label>Accessory URL${inputHtml(`${base}.button.url`, block.button?.url, 'https://...')}</label><label>Emoji${inputHtml(`${base}.button.emoji`, block.button?.emoji, '↗')}</label></div>`;
+  } else if (block.type === 'media') {
+    body = `<label>Media URL${inputHtml(`${base}.url`, block.url, 'https://...')}</label>`;
+  } else if (block.type === 'separator') {
+    body = `<div class="inline-row">${switchHtml(`${base}.divider`, block.divider !== false, 'Divider')}</div><label>Spacing<select data-path="${base}.spacing"><option value="1" ${Number(block.spacing) !== 2 ? 'selected' : ''}>Small</option><option value="2" ${Number(block.spacing) === 2 ? 'selected' : ''}>Large</option></select></label>`;
+  } else {
+    body = `<label>Text ${countText(block.text, 4000)}${textAreaHtml(`${base}.text`, block.text, 'Text content', 5, 'maxlength="4000"')}</label>`;
+  }
+  return miniCard(`${blockIndex + 1}. ${block.type === 'text' ? 'Содержимое' : block.type}`, body, actions, block.open !== false);
+}
+
+function setByPath(path, value) {
+  const parts = String(path).split('.');
+  let target = state;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const key = /^\d+$/.test(parts[i]) ? Number(parts[i]) : parts[i];
+    if (target[key] === undefined) return;
+    target = target[key];
+  }
+  const last = parts.at(-1);
+  target[/^\d+$/.test(last) ? Number(last) : last] = value;
+}
+function moveItem(array, from, to) {
+  if (!Array.isArray(array) || from < 0 || from >= array.length || to < 0 || to >= array.length) return;
+  const [item] = array.splice(from, 1);
+  array.splice(to, 0, item);
+}
+function messageFromElement(el) {
+  const card = el.closest('.message-card');
+  if (!card) return null;
+  return state.messages.find((m) => m.id === card.dataset.messageId) || null;
+}
+function messageIndex(message) { return state.messages.indexOf(message); }
+function rerenderAfterStructureChange() { saveProjectDebounced(); renderMessages(); renderPreview(); }
+function updatePreviewAfterInput() { saveProjectDebounced(); renderPreview(); }
+
+function renderPreview() {
+  $('previewChannel').textContent = selectedChannelName();
+  const wrap = $('previewMessagesWrap');
+  wrap.innerHTML = '';
+  if (!state.messages.length) {
+    wrap.innerHTML = '<div class="preview-empty">Nothing to preview.</div>';
+    return;
+  }
+  for (const msg of state.messages) {
+    wrap.appendChild(renderPreviewMessage(msg));
+  }
+}
+function renderPreviewMessage(msg) {
+  const row = document.createElement('div');
+  row.className = 'discord-message';
+  const avatar = msg.avatarUrl || state.bot?.avatarUrl || '';
+  row.innerHTML = `<img class="avatar" src="${escapeHtml(avatar)}" alt=""><div class="msg-main"><div class="msg-head"><span class="username">${escapeHtml(msg.name || state.bot?.username || state.bot?.tag || 'Bot')}</span><span class="bot-tag">BOT</span><span class="time">Сегодня в ${new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span></div><div class="msg-render"></div></div>`;
+  const body = row.querySelector('.msg-render');
+  if (msg.threadName) body.insertAdjacentHTML('beforeend', `<div class="small-muted">Ветка: ${escapeHtml(msg.threadName)}</div>`);
+  if (msg.type === 'v2' || msg.useV2 || msg.v2?.enabled) renderPreviewV2(msg, body);
+  else renderPreviewV1(msg, body);
+  return row;
+}
+function renderPreviewV1(msg, body) {
+  const content = document.createElement('div');
+  content.className = `preview-content ${msg.content.trim() ? '' : 'empty'}`.trim();
+  content.textContent = msg.content.trim() || ((msg.embeds.length || msg.buttons.length) ? '' : 'Пустое сообщение');
+  body.appendChild(content);
+  for (const embed of msg.embeds) body.appendChild(previewEmbed(embed));
+  body.appendChild(previewButtons(msg.buttonsEnabled !== false ? msg.buttons : []));
+}
+function renderPreviewV2(msg, body) {
+  const blocks = msg.v2?.blocks || [];
+  const container = document.createElement('div');
+  container.className = 'v2-container';
+  container.innerHTML = `<div class="v2-accent" style="background:${escapeHtml(normalizeColor(msg.v2?.accentColor || '#5865f2'))}"></div><div class="v2-inner"></div>`;
+  const inner = container.querySelector('.v2-inner');
+  if (!blocks.length && !msg.buttons.length) inner.insertAdjacentHTML('beforeend', '<div class="preview-content empty">Пустое V2 сообщение</div>');
+  for (const block of blocks) {
+    if (block.type === 'section') {
+      const section = document.createElement('div');
+      section.className = 'v2-section';
+      section.innerHTML = `<div class="preview-content">${escapeHtml(block.text || '')}</div>`;
+      if (block.button?.label || block.button?.url) {
+        const btn = document.createElement('div');
+        btn.className = 'preview-button link';
+        btn.textContent = `${block.button?.emoji ? `${block.button.emoji} ` : ''}${block.button?.label || 'Link'}`;
+        section.appendChild(btn);
+      }
+      inner.appendChild(section);
+    } else if (block.type === 'media') {
+      const media = document.createElement('div');
+      media.className = 'v2-media';
+      media.textContent = block.url || 'Media URL';
+      inner.appendChild(media);
+    } else if (block.type === 'separator') {
+      const sep = document.createElement('div');
+      sep.className = 'v2-separator';
+      sep.style.height = Number(block.spacing) === 2 ? '2px' : '1px';
+      inner.appendChild(sep);
+    } else {
+      const text = document.createElement('div');
+      text.className = 'preview-content';
+      text.textContent = block.text || '';
+      inner.appendChild(text);
+    }
+  }
+  const buttons = previewButtons(msg.buttonsEnabled !== false ? msg.buttons : []);
+  if (buttons.childElementCount) inner.appendChild(buttons);
+  body.appendChild(container);
+}
+function previewEmbed(embed) {
+  const wrap = document.createElement('div');
+  wrap.className = 'preview-embed';
+  wrap.innerHTML = `<div class="embed-stripe" style="background:${escapeHtml(normalizeColor(embed.color || '#5865f2'))}"></div><div class="embed-inner"></div>`;
   const inner = wrap.querySelector('.embed-inner');
-  if (embed.authorName) inner.insertAdjacentHTML('beforeend', `<div class="embed-author">${escapeHtml(embed.authorName)}</div>`);
+  if (embed.author?.name) inner.insertAdjacentHTML('beforeend', `<div class="embed-author">${escapeHtml(embed.author.name)}</div>`);
   if (embed.title) inner.insertAdjacentHTML('beforeend', `<div class="embed-title">${escapeHtml(embed.title)}</div>`);
   if (embed.description) inner.insertAdjacentHTML('beforeend', `<div class="embed-desc">${escapeHtml(embed.description)}</div>`);
   if (embed.fields?.length) {
-    const grid = document.createElement('div'); grid.className = 'embed-field-grid';
-    embed.fields.forEach((field) => {
-      const item = document.createElement('div'); item.className = `embed-field ${field.inline ? '' : 'full'}`.trim();
+    const fields = document.createElement('div');
+    fields.className = 'embed-fields';
+    for (const field of embed.fields) {
+      const item = document.createElement('div');
+      item.className = `embed-field ${field.inline ? '' : 'full'}`.trim();
       item.innerHTML = `<div class="embed-field-name">${escapeHtml(field.name || '\u200b')}</div><div class="embed-field-value">${escapeHtml(field.value || '\u200b')}</div>`;
-      grid.appendChild(item);
-    });
-    inner.appendChild(grid);
+      fields.appendChild(item);
+    }
+    inner.appendChild(fields);
   }
-  if (embed.image) inner.insertAdjacentHTML('beforeend', `<img class="embed-img" src="${escapeHtml(embed.image)}" alt="embed image">`);
-  if (embed.thumbnail && !embed.image) inner.insertAdjacentHTML('beforeend', `<img class="embed-img" src="${escapeHtml(embed.thumbnail)}" alt="embed thumb">`);
-  if (embed.footerText || embed.timestamp) inner.insertAdjacentHTML('beforeend', `<div class="embed-footer">${escapeHtml(embed.footerText || '')}${embed.timestamp ? ' • now' : ''}</div>`);
+  const image = embed.image_url || '';
+  const thumb = embed.thumbnail_url || '';
+  if (image) inner.insertAdjacentHTML('beforeend', `<img class="embed-img" src="${escapeHtml(image)}" alt="embed image">`);
+  else if (thumb) inner.insertAdjacentHTML('beforeend', `<img class="embed-img" src="${escapeHtml(thumb)}" alt="thumbnail">`);
+  if (embed.footer?.text || embed.timestamp) inner.insertAdjacentHTML('beforeend', `<div class="embed-footer">${escapeHtml(embed.footer?.text || '')}${embed.timestamp ? ' • now' : ''}</div>`);
   return wrap;
 }
-
-function readBackups() { try { return JSON.parse(localStorage.getItem(BACKUP_KEY) || '[]'); } catch { return []; } }
-function writeBackups(items) { localStorage.setItem(BACKUP_KEY, JSON.stringify(items)); }
-function readHistory() { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; } }
-function writeHistory(items) { localStorage.setItem(HISTORY_KEY, JSON.stringify(items)); }
-function readTemplates() { try { return JSON.parse(localStorage.getItem(TEMPLATE_KEY) || '{}'); } catch { return {}; } }
-function writeTemplates(items) { localStorage.setItem(TEMPLATE_KEY, JSON.stringify(items)); }
-
-function openModal(title, bodyHtml, actions = []) {
-  $('modalTitle').textContent = title;
-  $('modalBody').innerHTML = bodyHtml;
-  $('modalActions').innerHTML = '';
-  actions.forEach((action) => {
-    const btn = document.createElement('button');
-    btn.className = `btn ${action.className || 'secondary'}`.trim();
-    btn.textContent = action.label;
-    btn.type = 'button';
-    btn.onclick = action.onClick;
-    $('modalActions').appendChild(btn);
-  });
-  $('modalBackdrop').classList.add('show');
+function previewButtons(buttons) {
+  const row = document.createElement('div');
+  row.className = 'preview-row';
+  for (const button of (buttons || []).filter((b) => b.enabled !== false && (b.label || b.url)).slice(0, LIMITS.buttons)) {
+    const btn = document.createElement('div');
+    btn.className = 'preview-button link';
+    btn.textContent = `${button.emoji ? `${button.emoji} ` : ''}${button.label || 'Link'}`;
+    row.appendChild(btn);
+  }
+  return row;
 }
-function closeModal() { $('modalBackdrop').classList.remove('show'); }
-function openAddMessageModal() {
-  openModal('Добавить сообщение', `
-    <div class="choice-list">
-      <div class="choice-card" data-choice="v1"><div class="choice-title"><span>Стандартное Сообщение</span></div><div class="small-note">Может отображать текст, вложения, эмбеды.</div></div>
-      <div class="choice-card" data-choice="v2"><div class="choice-title"><span>Сообщение с компонентами</span><span class="choice-badge">НОВЫЙ</span></div><div class="small-note">Более гибкое сообщение с контейнерами и компонентами.</div></div>
-    </div>
-  `, [{ label: 'Закрыть', onClick: closeModal }]);
-  $$('[data-choice]').forEach((el) => el.addEventListener('click', () => {
-    const msg = el.dataset.choice === 'v2' ? createV2Message() : createV1Message();
-    state.messages.push(msg);
-    state.activeMessageId = msg.id;
-    closeModal(); renderAll();
-  }));
-}
-function openBackupsModal() {
-  const list = readBackups();
-  openModal('Бэкапы', list.map((item) => `<div class="backup-item"><div><strong>${escapeHtml(item.name)}</strong><br><small>${new Date(item.at).toLocaleString('ru-RU')}</small></div><div class="mini-actions"><button class="btn small secondary" data-load-backup="${item.id}">Загрузить</button><button class="btn small danger" data-delete-backup="${item.id}">Удалить</button></div></div>`).join('') || '<p class="small-note">Пока пусто.</p>', [
-    { label: 'Сохранить текущий', className: 'primary', onClick: () => {
-      const list = readBackups(); list.unshift({ id: uid('backup'), name: `Backup ${new Date().toLocaleString('ru-RU')}`, at: new Date().toISOString(), project: buildProject() }); writeBackups(list.slice(0, 30)); openBackupsModal();
-    }},
-    { label: 'Закрыть', onClick: closeModal },
-  ]);
-  $$('[data-load-backup]').forEach((btn) => btn.onclick = () => { const item = readBackups().find((x) => x.id === btn.dataset.loadBackup); if (item) { applyProject(item.project); closeModal(); } });
-  $$('[data-delete-backup]').forEach((btn) => btn.onclick = () => { writeBackups(readBackups().filter((x) => x.id !== btn.dataset.deleteBackup)); openBackupsModal(); });
-}
-function openHistoryModal() {
-  const items = readHistory();
-  openModal('История', items.map((item, i) => `<div class="backup-item"><div><strong>${escapeHtml(item.type)} #${i+1}</strong><br><small>${new Date(item.at).toLocaleString('ru-RU')} · ${escapeHtml(item.url || '')}</small></div><div class="mini-actions"><button class="btn small secondary" data-load-history="${i}">Загрузить</button></div></div>`).join('') || '<p class="small-note">История появится после отправки.</p>', [{ label: 'Закрыть', onClick: closeModal }]);
-  $$('[data-load-history]').forEach((btn) => btn.onclick = () => { const item = items[Number(btn.dataset.loadHistory)]; if (item?.project) { applyProject(item.project); closeModal(); } });
-}
-function copyText(text, ok = 'Скопировано') {
-  navigator.clipboard.writeText(text).then(() => setStatus(ok)).catch(() => setStatus('Буфер обмена недоступен.', false));
-}
-function downloadText(filename, text) {
-  const blob = new Blob([text], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-}
-function togglePreview(on) { $('appView').classList.toggle('preview-mode', Boolean(on)); }
-function toggleSendDropdown(event) {
-  event.stopPropagation();
-  const menu = $('sendDropdown');
-  const rect = event.currentTarget.getBoundingClientRect();
-  menu.style.top = `${rect.bottom + 8}px`;
-  menu.style.left = `${Math.max(12, rect.right - 190)}px`;
-  menu.classList.toggle('show');
-}
-function closeMenus() { $('floatingMenu').classList.remove('show'); $('sendDropdown').classList.remove('show'); }
-function openFloatingMenu(target, items) {
-  const menu = $('floatingMenu');
-  menu.innerHTML = '';
-  items.forEach((item) => {
-    const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = item.label; btn.onclick = () => { closeMenus(); item.onClick(); }; menu.appendChild(btn);
-  });
-  const rect = target.getBoundingClientRect();
-  menu.style.top = `${rect.bottom + 6}px`;
-  menu.style.left = `${Math.max(12, rect.left)}px`;
-  menu.classList.add('show');
-}
-
-function findMessage(messageId) { return state.messages.find((m) => m.id === messageId); }
-function findEmbed(message, embedId) { return (message.embeds || []).find((e) => e.id === embedId) || (message.parts || []).flatMap((p) => p.type === 'container' ? p.embeds || [] : []).find((e) => e.id === embedId); }
-function findPart(message, partId) { return (message.parts || []).find((p) => p.id === partId); }
 
 async function loadMe() {
-  try {
-    const data = await api('/api/me');
-    state.bot = data.bot || null;
-  } catch {
-    const data = await api('/api/health');
-    const tag = data.bot || 'Bot';
-    state.bot = { tag, username: String(tag).split('#')[0] || 'Bot', avatarUrl: '' };
-  }
-  $('botTag').textContent = state.bot?.tag || 'Bot';
+  const data = await api('/api/health');
+  state.bot = data.bot && typeof data.bot === 'object' ? data.bot : { tag: data.bot || 'Bot' };
+  $('botTag').textContent = state.bot.tag || state.bot.username || 'Bot';
 }
 async function loadChannels() {
   const data = await api('/api/channels');
-  const select = $('channelSelect');
-  select.innerHTML = '';
-  if (Array.isArray(data.guilds)) {
-    state.guilds = data.guilds || [];
-  } else if (Array.isArray(data.channels)) {
-    const byGuild = new Map();
-    for (const channel of data.channels) {
-      const key = channel.guildId || channel.guildName || 'guild';
-      if (!byGuild.has(key)) byGuild.set(key, { id: channel.guildId || key, name: channel.guildName || 'Server', channels: [] });
-      byGuild.get(key).channels.push(channel);
-    }
-    state.guilds = [...byGuild.values()];
-  } else {
-    state.guilds = [];
-  }
-  state.guilds.forEach((guild) => {
-    const group = document.createElement('optgroup');
-    group.label = guild.name;
-    (guild.channels || []).forEach((channel) => {
-      const option = document.createElement('option');
-      option.value = channel.id;
-      option.textContent = channel.label || `#${channel.name}`;
-      group.appendChild(option);
-    });
-    select.appendChild(group);
-  });
-  if (!select.options.length) { const option = document.createElement('option'); option.value = ''; option.textContent = 'No sendable channels'; select.appendChild(option); }
-}
-async function sendPayload() {
-  const message = currentMessage();
-  const payload = buildSendPayload(message);
-  if (!payload.channelId) return setStatus('Выбери канал.', false);
-  if (!payload.content.trim() && !payload.embeds.length && !payload.buttons.length) return setStatus('Сообщение пустое.', false);
-  $('sendBtn').disabled = true;
-  const old = $('sendBtn').textContent; $('sendBtn').textContent = 'Отправка...';
-  try {
-    const editTarget = String(payload.editMessage || '').trim();
-    const isApiKeyMode = state.authMode === 'api-key' || Boolean(state.apiKey);
-    const data = editTarget && isApiKeyMode
-      ? await api('/api/edit', { method: 'POST', body: JSON.stringify({ channelId: payload.channelId, messageId: editTarget, message: payload }) })
-      : await api('/api/send', { method: 'POST', body: JSON.stringify(payload) });
-    const history = readHistory(); history.unshift({ type: data.edited ? 'edit' : (editTarget && isApiKeyMode ? 'edit' : 'send'), at: new Date().toISOString(), url: data.url || '', project: buildProject() }); writeHistory(history.slice(0, 25));
-    setStatus(`${(data.edited || (editTarget && isApiKeyMode)) ? 'Изменено' : 'Отправлено'}: ${data.url || data.messageId || 'ok'}`);
-  } catch (error) { setStatus(error.message, false); }
-  finally { $('sendBtn').disabled = false; $('sendBtn').textContent = old; }
-}
-async function enterApp() {
-  await loadMe();
-  await loadChannels();
-  $('loginView').classList.add('hidden');
-  $('appView').classList.remove('hidden');
-  if (!state.messages.length) { const msg = createV1Message(); state.messages = [msg]; state.activeMessageId = msg.id; }
-  renderAll();
+  if (Array.isArray(data.channels)) state.channels = data.channels;
+  else if (Array.isArray(data.guilds)) state.channels = data.guilds.flatMap((guild) => (guild.channels || []).map((channel) => ({ ...channel, guildId: guild.id, guildName: guild.name, label: `${guild.name} / #${channel.name}` })));
+  else state.channels = [];
+  renderChannels();
 }
 async function bootstrap() {
-  if ($('apiBaseInput')) $('apiBaseInput').value = state.apiBase || '';
-  if (!state.apiKey && state.authMode !== 'session') {
-    $('appView').classList.add('hidden');
+  $('apiBaseInput').value = state.apiBase || '';
+  $('passwordInput').value = state.apiKey || '';
+  if (!state.apiBase && location.protocol !== 'file:' && location.hostname !== 'localhost' && !location.hostname.startsWith('127.')) {
     $('loginView').classList.remove('hidden');
+    $('appView').classList.add('hidden');
     return;
   }
-  try { await enterApp(); }
-  catch {
-    $('appView').classList.add('hidden');
+  if (!state.apiKey && state.apiBase) {
     $('loginView').classList.remove('hidden');
+    $('appView').classList.add('hidden');
+    return;
+  }
+  try {
+    await loadMe();
+    await loadChannels();
+    $('loginView').classList.add('hidden');
+    $('appView').classList.remove('hidden');
+    const saved = loadSavedProject();
+    applyProject(saved || { messages: [createMessage('v1')] });
+    renderPreview();
+  } catch (error) {
+    $('loginError').textContent = error.message || String(error);
+    $('loginView').classList.remove('hidden');
+    $('appView').classList.add('hidden');
+  }
+}
+async function login(event) {
+  event.preventDefault();
+  $('loginError').textContent = '';
+  state.apiBase = $('apiBaseInput').value.trim().replace(/\/+$/, '');
+  state.apiKey = $('passwordInput').value.trim();
+  localStorage.setItem(STORE.apiBase, state.apiBase);
+  localStorage.setItem(STORE.apiKey, state.apiKey);
+  try {
+    await loadMe();
+    await loadChannels();
+    $('loginView').classList.add('hidden');
+    $('appView').classList.remove('hidden');
+    applyProject(loadSavedProject() || { messages: [createMessage('v1')] });
+    setStatus('Подключено.');
+  } catch (error) {
+    $('loginError').textContent = error.message || String(error);
   }
 }
 
-function bindGeneralInputs() {
-  document.addEventListener('input', (event) => {
-    const t = event.target;
-    if (t.matches('[data-bind]')) {
-      const message = findMessage(t.dataset.messageId); if (!message) return;
-      message[t.dataset.bind] = t.value; renderPreview();
-    }
-    if (t.matches('[data-file-bind]')) {
-      const message = findMessage(t.dataset.messageId); if (!message) return;
-      const file = message.files[Number(t.dataset.index)]; if (!file) return;
-      file[t.dataset.fileBind] = t.value; renderPreview();
-    }
-    if (t.matches('[data-embed-bind]')) {
-      const message = findMessage(t.dataset.messageId); const embed = findEmbed(message, t.dataset.embedId); if (!embed) return;
-      embed[t.dataset.embedBind] = t.value; renderPreview();
-    }
-    if (t.matches('[data-field-bind]')) {
-      const message = findMessage(t.dataset.messageId); const embed = findEmbed(message, t.dataset.embedId); if (!embed) return;
-      const field = (embed.fields || []).find((x) => x.id === t.dataset.fieldId); if (!field) return;
-      field[t.dataset.fieldBind] = t.value; renderPreview();
-    }
-    if (t.matches('[data-component-bind]')) {
-      const message = findMessage(t.dataset.messageId); if (!message) return;
-      const row = resolveRow(message, t.dataset.rowId, t.dataset.partId, t.dataset.v2 === '1'); if (!row) return;
-      const cmp = row.items.find((x) => x.id === t.dataset.componentId); if (!cmp) return;
-      cmp[t.dataset.componentBind] = t.value; renderPreview();
-    }
-    if (t.matches('[data-v2-bind]')) {
-      const message = findMessage(t.dataset.messageId); const part = findPart(message, t.dataset.partId); if (!part) return;
-      part[t.dataset.v2Bind] = t.value; renderPreview();
-    }
-    if (t.matches('[data-accessory-bind]')) {
-      const message = findMessage(t.dataset.messageId); const part = findPart(message, t.dataset.partId); if (!part?.accessory) return;
-      part.accessory[t.dataset.accessoryBind] = t.value; renderPreview();
-    }
-    if (t.matches('[data-media-bind]')) {
-      const message = findMessage(t.dataset.messageId); const part = findPart(message, t.dataset.partId); if (!part) return;
-      part.urls[Number(t.dataset.index)] = t.value; renderPreview();
-    }
-    if (t.matches('[data-filepart-bind]')) {
-      const message = findMessage(t.dataset.messageId); const part = findPart(message, t.dataset.partId); if (!part) return;
-      part[t.dataset.filepartBind] = t.value; renderPreview();
-    }
-    if (t.matches('[data-separator-bind]')) {
-      const message = findMessage(t.dataset.messageId); const part = findPart(message, t.dataset.partId); if (!part) return;
-      part[t.dataset.separatorBind] = t.value; renderPreview();
-    }
-  });
-  document.addEventListener('change', (event) => {
-    const t = event.target;
-    if (t.id.startsWith('pingUsers_')) { const id = t.id.replace('pingUsers_', ''); const message = findMessage(id); if (message) { message.pings.users = t.checked; renderPreview(); } }
-    if (t.id.startsWith('pingRoles_')) { const id = t.id.replace('pingRoles_', ''); const message = findMessage(id); if (message) { message.pings.roles = t.checked; renderPreview(); } }
-    if (t.id.startsWith('timestamp_')) {
-      const embedId = t.id.replace('timestamp_', '');
-      state.messages.forEach((message) => { const embed = findEmbed(message, embedId); if (embed) embed.timestamp = t.checked; });
-      renderPreview();
-    }
-    if (t.id.startsWith('inline_')) {
-      const fieldId = t.id.replace('inline_', '');
-      state.messages.forEach((message) => {
-        (message.embeds || []).forEach((embed) => { const field = (embed.fields || []).find((x) => x.id === fieldId); if (field) field.inline = t.checked; });
-        (message.parts || []).forEach((part) => (part.embeds || []).forEach((embed) => { const field = (embed.fields || []).find((x) => x.id === fieldId); if (field) field.inline = t.checked; }));
-      });
-      renderPreview();
-    }
-    if (t.id.startsWith('divider_')) {
-      const partId = t.id.replace('divider_', '');
-      state.messages.forEach((message) => { const part = findPart(message, partId); if (part) part.divider = t.checked; });
-      renderPreview();
-    }
-  });
+function openAddMessageModal() {
+  openModal('Добавить сообщение', `<div class="choice-grid">
+    <div class="choice-card" data-choice="v1"><div class="choice-title"><span>Стандартное сообщение</span><span class="choice-badge">V1</span></div><div class="small-muted">Content, embeds и link-buttons. Это самая стабильная отправка.</div></div>
+    <div class="choice-card" data-choice="v2"><div class="choice-title"><span>Сообщение с компонентами</span><span class="choice-badge">V2</span></div><div class="small-muted">Text, section, media, separator и link-buttons через Components V2.</div></div>
+  </div>`, [{ label: 'Закрыть', run: closeModal }]);
+  $$('[data-choice]').forEach((card) => card.addEventListener('click', () => {
+    const msg = createMessage(card.dataset.choice === 'v2' ? 'v2' : 'v1');
+    state.messages.push(msg);
+    state.activeMessageId = msg.id;
+    closeModal();
+    rerenderAfterStructureChange();
+  }));
 }
-function resolveRow(message, rowId, partId, isV2) {
-  if (!isV2) return (message.rows || []).find((x) => x.id === rowId);
-  if (partId) {
-    const part = findPart(message, partId); return (part?.parts || []).find((x) => x.id === rowId) || (message.parts || []).find((x) => x.id === rowId);
-  }
-  return (message.parts || []).find((x) => x.id === rowId);
-}
-
-function bindClicks() {
-  $('loginForm').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    $('loginError').textContent = '';
-    const password = $('passwordInput').value;
-    state.apiBase = ($('apiBaseInput')?.value || '').trim();
-    localStorage.setItem('lds_api_base', state.apiBase);
-
-    if (isAppsScriptProxy(state.apiBase)) {
-      state.apiKey = password; // PANEL_ACCESS_KEY from Code.gs
-      state.authMode = 'apps-script';
-      localStorage.setItem('lds_api_key', state.apiKey);
-      localStorage.setItem('lds_auth_mode', state.authMode);
-      try {
-        await enterApp();
-        $('passwordInput').value = '';
-      } catch (appsScriptError) {
-        state.authMode = '';
-        localStorage.removeItem('lds_auth_mode');
-        $('loginError').textContent = `Apps Script: ${appsScriptError.message}`;
-      }
-      return;
-    }
-
-    // Direct WEB_API_KEY mode for local/server panel.
-    state.apiKey = password;
-    state.authMode = 'api-key';
-    localStorage.setItem('lds_api_key', state.apiKey);
-    localStorage.setItem('lds_auth_mode', state.authMode);
-    try {
-      await enterApp();
-      $('passwordInput').value = '';
-      return;
-    } catch (apiKeyError) {
-      // Fallback for old cookie-login server.
-      state.apiKey = '';
-      state.authMode = 'session';
-      localStorage.removeItem('lds_api_key');
-      localStorage.setItem('lds_auth_mode', state.authMode);
-      try {
-        await api('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
-        await enterApp();
-        $('passwordInput').value = '';
-      } catch (sessionError) {
-        state.authMode = '';
-        localStorage.removeItem('lds_auth_mode');
-        $('loginError').textContent = `API-key: ${apiKeyError.message}; session: ${sessionError.message}`;
-      }
-    }
-  });
-  $('addMessageBtn').addEventListener('click', openAddMessageModal);
-  $('backupsBtn').addEventListener('click', openBackupsModal);
-  $('historyBtn').addEventListener('click', openHistoryModal);
-  $('settingsBtn').addEventListener('click', () => $('targetSection').scrollIntoView({ behavior: 'smooth' }));
-  $('shareBtn').addEventListener('click', () => copyText(JSON.stringify(buildProject()), 'Проект скопирован в буфер'));
-  $('resetBtn').addEventListener('click', () => { if (confirm('Очистить всё?')) { const msg = createV1Message(); state.messages = [msg]; state.activeMessageId = msg.id; $('editMessageInput').value = ''; renderAll(); } });
-  $('addWebhookBtn').addEventListener('click', () => $('targetSection').scrollIntoView({ behavior: 'smooth' }));
-  $('sendBtn').addEventListener('click', sendPayload);
-  $('sendMenuBtn').addEventListener('click', toggleSendDropdown);
-  $('sendDropdown').addEventListener('click', (event) => { const btn = event.target.closest('[data-send-action]'); if (!btn) return; closeMenus(); if (btn.dataset.sendAction === 'send') sendPayload(); if (btn.dataset.sendAction === 'copy') copyText(JSON.stringify(buildSendPayload(currentMessage()), null, 2), 'Payload copied'); if (btn.dataset.sendAction === 'download') downloadText(`lds-message-${Date.now()}.json`, JSON.stringify(buildSendPayload(currentMessage()), null, 2)); });
-  $('channelSelect').addEventListener('change', renderPreview);
-  $('editMessageInput').addEventListener('input', renderPreview);
-  $('refreshChannelsBtn').addEventListener('click', () => loadChannels().then(renderPreview).catch((error) => setStatus(error.message, false)));
-  $('refreshPreview').addEventListener('click', renderPreview);
-  $('previewBtn').addEventListener('click', () => togglePreview(true));
-  $('editorBtn').addEventListener('click', () => togglePreview(false));
-  $('modalClose').addEventListener('click', closeModal);
-  $('modalBackdrop').addEventListener('click', (event) => { if (event.target.id === 'modalBackdrop') closeModal(); });
-
-  document.addEventListener('click', (event) => {
-    const btn = event.target.closest('[data-action]');
-    if (!btn) {
-      if (!event.target.closest('.dropdown')) closeMenus();
-      return;
-    }
-    const action = btn.dataset.action;
-    const message = findMessage(btn.dataset.messageId);
-    if (action === 'editMessage') { state.activeMessageId = btn.closest('.message-card').dataset.messageId; renderAll(); }
-    if (action === 'duplicateMessage' && message) { const clone = cloneMessageDeep(message); state.messages.splice(state.messages.indexOf(message) + 1, 0, clone); renderAll(); }
-    if (action === 'deleteMessage' && message) { if (state.messages.length > 1) state.messages = state.messages.filter((m) => m.id !== message.id); else state.messages = [createV1Message()]; state.activeMessageId = state.messages[0].id; renderAll(); }
-    if (action === 'addMockFile' && message) { if (message.files.length >= 10) return setStatus('Максимум 10 файлов.', false); message.files.push({ name: `file_${message.files.length + 1}.png`, url: '' }); renderAll(); }
-    if (action === 'removeFile' && message) { message.files.splice(Number(btn.dataset.index), 1); renderAll(); }
-    if (action === 'pasteFile') setStatus('Вставка файлов-заглушек пока не реализована.', false);
-    if (action === 'addV1' && message) {
-      openFloatingMenu(btn, [
-        { label: '➕ Добавить Embed', onClick: () => { message.embeds.push(createEmbed()); renderAll(); } },
-        { label: '↩ Добавить Компоненты', onClick: () => { message.rows.push(createV1Row()); renderAll(); } },
-      ]);
-    }
-    if (action === 'messageOptions' && message) {
-      openFloatingMenu(btn, [
-        { label: 'Сохранить как шаблон', onClick: () => saveTemplateForMessage(message) },
-        { label: 'Загрузить шаблон', onClick: () => openTemplateModal(message) },
-      ]);
-    }
-    if (action === 'setLink') setStatus('Set Link пока оставлен как заглушка.', false);
-    if (action === 'duplicateEmbed' && message) {
-      const embed = findEmbed(message, btn.dataset.embedId); if (!embed) return; const list = message.embeds.includes(embed) ? message.embeds : (message.parts.find((p) => (p.embeds || []).includes(embed))?.embeds || []); const idx = list.indexOf(embed); list.splice(idx + 1, 0, structuredClone(embed)); renderAll();
-    }
-    if (action === 'deleteEmbed' && message) {
-      message.embeds = (message.embeds || []).filter((e) => e.id !== btn.dataset.embedId);
-      message.parts?.forEach((part) => { if (part.embeds) part.embeds = part.embeds.filter((e) => e.id !== btn.dataset.embedId); });
-      renderAll();
-    }
-    if (action === 'addField' && message) { const embed = findEmbed(message, btn.dataset.embedId); if (!embed) return; embed.fields.push(createField()); renderAll(); }
-    if (action === 'deleteField' && message) { const embed = findEmbed(message, btn.dataset.embedId); if (!embed) return; embed.fields = embed.fields.filter((f) => f.id !== btn.dataset.fieldId); renderAll(); }
-    if (action === 'duplicateRow' && message) {
-      const row = resolveRow(message, btn.dataset.rowId, btn.dataset.partId, btn.dataset.v2 === '1'); if (!row) return;
-      const clone = cloneRowDeep(row);
-      if (btn.dataset.v2 === '1') {
-        if (btn.dataset.partId) { const part = findPart(message, btn.dataset.partId); part.parts.splice(part.parts.indexOf(row) + 1, 0, clone); }
-        else message.parts.splice(message.parts.indexOf(row) + 1, 0, clone);
-      } else message.rows.splice(message.rows.indexOf(row) + 1, 0, clone);
-      renderAll();
-    }
-    if (action === 'deleteRow' && message) {
-      if (btn.dataset.v2 === '1') {
-        if (btn.dataset.partId) { const part = findPart(message, btn.dataset.partId); part.parts = part.parts.filter((r) => r.id !== btn.dataset.rowId); }
-        else message.parts = message.parts.filter((r) => r.id !== btn.dataset.rowId);
-      } else message.rows = message.rows.filter((r) => r.id !== btn.dataset.rowId);
-      renderAll();
-    }
-    if (action === 'addRowComponent' && message) {
-      const row = resolveRow(message, btn.dataset.rowId, btn.dataset.partId, btn.dataset.v2 === '1'); if (!row) return;
-      openFloatingMenu(btn, [
-        ['button','Кнопка'], ['link','Кнопка с Ссылкой'], ['select','Меню Выбора'], ['userSelect','Меню Выбора Пользователей'], ['roleSelect','Меню Выбора Ролей'], ['mentionableSelect','Меню Выбора Пользователей и Ролей'], ['channelSelect','Меню Выбора Каналов']
-          .map(([type, label]) => ({ type, label }))
-      ].flat().map((item) => ({ label: item.label, onClick: () => { row.items.push(createComponent(item.type)); renderAll(); } })));
-    }
-    if (action === 'deleteComponent' && message) {
-      const row = resolveRow(message, btn.dataset.rowId, btn.dataset.partId, btn.dataset.v2 === '1'); if (!row) return; row.items = row.items.filter((x) => x.id !== btn.dataset.componentId); renderAll();
-    }
-    if (action === 'addV2' && message) {
-      openFloatingMenu(btn, [
-        { label: 'T Содержимое', onClick: () => { message.parts.push(createContentPart()); renderAll(); } },
-        { label: '⊞ Container', onClick: () => { message.parts.push(createContainerPart()); renderAll(); } },
-        { label: '🖼 Media Gallery', onClick: () => { message.parts.push(createMediaGalleryPart()); renderAll(); } },
-        { label: '🗎 Файл', onClick: () => { message.parts.push(createFilePart()); renderAll(); } },
-        { label: '➖ Разделитель', onClick: () => { message.parts.push(createSeparatorPart()); renderAll(); } },
-        { label: '☰ Строка', onClick: () => { message.parts.push(createRowPart()); renderAll(); } },
-      ]);
-    }
-    if (action === 'duplicatePart' && message) { const part = findPart(message, btn.dataset.partId); if (!part) return; const clone = clonePartDeep(part); message.parts.splice(message.parts.indexOf(part) + 1, 0, clone); renderAll(); }
-    if (action === 'deletePart' && message) { message.parts = message.parts.filter((p) => p.id !== btn.dataset.partId); renderAll(); }
-    if (action === 'addAccessory' && message) {
-      const part = findPart(message, btn.dataset.partId); if (!part) return;
-      openFloatingMenu(btn, [
-        { label: 'Кнопка', onClick: () => { part.accessory = createComponent('button'); renderAll(); } },
-        { label: 'Кнопка с Ссылкой', onClick: () => { part.accessory = createComponent('link'); renderAll(); } },
-        { label: 'Миниатюра', onClick: () => { part.accessory = { type: 'thumbnail', label: 'Миниатюра', url: '' }; renderAll(); } },
-      ]);
-    }
-    if (action === 'removeAccessory' && message) { const part = findPart(message, btn.dataset.partId); if (part) { part.accessory = null; renderAll(); } }
-    if (action === 'addContainerThing' && message) {
-      const part = findPart(message, btn.dataset.partId); if (!part) return;
-      openFloatingMenu(btn, [
-        { label: 'Добавить Embed', onClick: () => { part.embeds.push(createEmbed()); renderAll(); } },
-        { label: 'Добавить Строку', onClick: () => { part.parts.push(createRowPart()); renderAll(); } },
-        { label: 'Добавить Содержимое', onClick: () => { part.parts.push(createContentPart()); renderAll(); } },
-      ]);
-    }
-    if (action === 'addMediaUrl' && message) { const part = findPart(message, btn.dataset.partId); if (part) { part.urls.push(''); renderAll(); } }
-  });
-
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') { closeModal(); closeMenus(); }
-  });
-}
-
-function saveTemplateForMessage(message) {
-  openModal('Сохранить шаблон', '<label>Имя шаблона<input id="templateNameInput" placeholder="Название"></label>', [
-    { label: 'Сохранить', className: 'primary', onClick: () => {
-      const name = $('templateNameInput').value.trim(); if (!name) return setStatus('Введите имя шаблона.', false);
-      const all = readTemplates(); all[name] = structuredClone(message); writeTemplates(all); closeModal(); setStatus('Шаблон сохранён.');
-    }},
-    { label: 'Отмена', onClick: closeModal },
+function openJsonModal() {
+  openModal('JSON проекта', `<textarea id="jsonText" rows="18">${escapeHtml(JSON.stringify(projectData(), null, 2))}</textarea>`, [
+    { label: 'Copy', className: 'primary', run: () => copyText($('jsonText').value, 'JSON copied') },
+    { label: 'Apply', className: 'green', run: () => { try { applyProject(JSON.parse($('jsonText').value)); closeModal(); setStatus('JSON применён.'); } catch (e) { setStatus(`JSON error: ${e.message}`, false); } } },
+    { label: 'Close', run: closeModal },
   ]);
 }
-function openTemplateModal(message) {
-  const all = readTemplates();
-  openModal('Шаблоны', Object.keys(all).map((name) => `<div class="backup-item"><strong>${escapeHtml(name)}</strong><div class="mini-actions"><button class="btn small secondary" data-load-template="${escapeHtml(name)}">Загрузить</button><button class="btn small danger" data-delete-template="${escapeHtml(name)}">Удалить</button></div></div>`).join('') || '<p class="small-note">Шаблонов нет.</p>', [{ label: 'Закрыть', onClick: closeModal }]);
-  $$('[data-load-template]').forEach((btn) => btn.onclick = () => {
-    const tpl = structuredClone(all[btn.dataset.loadTemplate]);
-    if (!tpl) return; tpl.id = message.id; const idx = state.messages.findIndex((x) => x.id === message.id); state.messages[idx] = tpl; state.activeMessageId = tpl.id; closeModal(); renderAll();
-  });
-  $$('[data-delete-template]').forEach((btn) => btn.onclick = () => { const data = readTemplates(); delete data[btn.dataset.deleteTemplate]; writeTemplates(data); openTemplateModal(message); });
+function openBackupsModal() {
+  const backups = readJson(STORE.backups, []);
+  const list = backups.map((item) => `<div class="backup-item"><div><strong>${escapeHtml(item.name)}</strong><br><span class="small-muted">${new Date(item.at).toLocaleString('ru-RU')}</span></div><div class="inline-row"><button class="btn small secondary" data-load-backup="${item.id}">Load</button><button class="btn small danger" data-delete-backup="${item.id}">Delete</button></div></div>`).join('') || '<div class="empty-box">Бэкапов пока нет.</div>';
+  openModal('Бэкапы', list, [
+    { label: 'Сохранить текущий', className: 'primary', run: () => { const items = readJson(STORE.backups, []); items.unshift({ id: id('backup'), name: `Backup ${new Date().toLocaleString('ru-RU')}`, at: new Date().toISOString(), project: projectData() }); localStorage.setItem(STORE.backups, JSON.stringify(items.slice(0, 30))); openBackupsModal(); } },
+    { label: 'Close', run: closeModal },
+  ]);
+  $$('[data-load-backup]').forEach((btn) => btn.addEventListener('click', () => { const found = readJson(STORE.backups, []).find((x) => x.id === btn.dataset.loadBackup); if (found) { applyProject(found.project); closeModal(); } }));
+  $$('[data-delete-backup]').forEach((btn) => btn.addEventListener('click', () => { const items = readJson(STORE.backups, []).filter((x) => x.id !== btn.dataset.deleteBackup); localStorage.setItem(STORE.backups, JSON.stringify(items)); openBackupsModal(); }));
+}
+function openHistoryModal() {
+  const items = readJson(STORE.history, []);
+  const list = items.map((item, index) => `<div class="backup-item"><div><strong>${escapeHtml(item.type)} #${index + 1}</strong><br><span class="small-muted">${new Date(item.at).toLocaleString('ru-RU')} · ${escapeHtml(item.url || '')}</span></div><button class="btn small secondary" data-load-history="${index}">Load</button></div>`).join('') || '<div class="empty-box">История появится после отправки.</div>';
+  openModal('История', list, [{ label: 'Close', run: closeModal }]);
+  $$('[data-load-history]').forEach((btn) => btn.addEventListener('click', () => { const item = items[Number(btn.dataset.loadHistory)]; if (item?.project) { applyProject(item.project); closeModal(); } }));
+}
+async function loadExistingMessage() {
+  if (!channelId()) return setStatus('Выбери канал.', false);
+  const messageId = editMessageValue();
+  if (!messageId) return setStatus('Вставь Message ID или ссылку.', false);
+  try {
+    const data = await api(`/api/message?channelId=${encodeURIComponent(channelId())}&messageId=${encodeURIComponent(messageId)}`);
+    const msg = hydrateMessage(data.message || {});
+    state.messages = [msg];
+    state.activeMessageId = msg.id;
+    saveProjectDebounced();
+    renderMessages();
+    renderPreview();
+    setStatus('Сообщение загружено.');
+  } catch (error) { setStatus(error.message, false); }
 }
 
-bindGeneralInputs();
-bindClicks();
+function handleInput(event) {
+  const el = event.target.closest('[data-path]');
+  if (!el) return;
+  let value = el.type === 'checkbox' ? el.checked : el.value;
+  if (el.type === 'color') value = normalizeColor(value);
+  if (/\.spacing$/.test(el.dataset.path)) value = Number(value);
+  setByPath(el.dataset.path, value);
+  updatePreviewAfterInput();
+}
+function handleClick(event) {
+  const actionEl = event.target.closest('[data-action]');
+  if (event.target.closest('[data-toggle-fold]')) {
+    if (!actionEl) event.target.closest('[data-fold]')?.classList.toggle('collapsed');
+  }
+  if (event.target.closest('[data-toggle-mini]')) {
+    if (!actionEl) event.target.closest('[data-mini]')?.classList.toggle('collapsed');
+  }
+  const cardHead = event.target.closest('[data-set-active]');
+  if (cardHead && !actionEl) setActive(cardHead.closest('.message-card').dataset.messageId);
+  if (!actionEl) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const msg = messageFromElement(actionEl);
+  if (!msg && !['add-message'].includes(actionEl.dataset.action)) return;
+  const mi = msg ? messageIndex(msg) : -1;
+  const action = actionEl.dataset.action;
+  if (action === 'toggle-message') { msg.open = !msg.open; rerenderAfterStructureChange(); return; }
+  if (action === 'move-message-up') { moveItem(state.messages, mi, mi - 1); rerenderAfterStructureChange(); return; }
+  if (action === 'move-message-down') { moveItem(state.messages, mi, mi + 1); rerenderAfterStructureChange(); return; }
+  if (action === 'duplicate-message') { const copy = hydrateMessage(clone(msg)); copy.id = id('msg'); state.messages.splice(mi + 1, 0, copy); state.activeMessageId = copy.id; rerenderAfterStructureChange(); return; }
+  if (action === 'delete-message') { state.messages.splice(mi, 1); if (!state.messages.length) state.messages.push(createMessage('v1')); state.activeMessageId = state.messages[Math.max(0, mi - 1)]?.id || state.messages[0].id; rerenderAfterStructureChange(); return; }
+  if (action === 'add-embed') { if (msg.embeds.length >= LIMITS.embeds) return setStatus('Максимум 10 embeds.', false); msg.embeds.push(createEmbed()); rerenderAfterStructureChange(); return; }
+  if (action === 'add-button') { if (msg.buttons.length >= LIMITS.buttons) return setStatus('Максимум 25 кнопок.', false); msg.buttons.push(createButton()); rerenderAfterStructureChange(); return; }
+  const ei = Number(actionEl.dataset.embedIndex);
+  const fi = Number(actionEl.dataset.fieldIndex);
+  const bi = Number(actionEl.dataset.buttonIndex);
+  const vi = Number(actionEl.dataset.blockIndex);
+  if (action === 'delete-embed') msg.embeds.splice(ei, 1);
+  if (action === 'duplicate-embed') msg.embeds.splice(ei + 1, 0, hydrateMessage({ embeds: [clone(msg.embeds[ei])] }).embeds[0]);
+  if (action === 'move-embed-up') moveItem(msg.embeds, ei, ei - 1);
+  if (action === 'move-embed-down') moveItem(msg.embeds, ei, ei + 1);
+  if (action === 'add-field') { if (msg.embeds[ei].fields.length >= LIMITS.fields) return setStatus('Максимум 25 полей.', false); msg.embeds[ei].fields.push(createField()); }
+  if (action === 'delete-field') msg.embeds[ei].fields.splice(fi, 1);
+  if (action === 'move-field-up') moveItem(msg.embeds[ei].fields, fi, fi - 1);
+  if (action === 'move-field-down') moveItem(msg.embeds[ei].fields, fi, fi + 1);
+  if (action === 'delete-button') msg.buttons.splice(bi, 1);
+  if (action === 'move-button-up') moveItem(msg.buttons, bi, bi - 1);
+  if (action === 'move-button-down') moveItem(msg.buttons, bi, bi + 1);
+  if (action === 'add-v2-block') {
+    showMenu(actionEl, [
+      { label: 'T Содержимое', run: () => { msg.v2.blocks.push(createV2Block('text')); rerenderAfterStructureChange(); } },
+      { label: '▣ Section + accessory', run: () => { msg.v2.blocks.push(createV2Block('section')); rerenderAfterStructureChange(); } },
+      { label: '🖼 Media Gallery', run: () => { msg.v2.blocks.push(createV2Block('media')); rerenderAfterStructureChange(); } },
+      { label: '— Separator', run: () => { msg.v2.blocks.push(createV2Block('separator')); rerenderAfterStructureChange(); } },
+    ]);
+    return;
+  }
+  if (action === 'delete-v2') msg.v2.blocks.splice(vi, 1);
+  if (action === 'duplicate-v2') msg.v2.blocks.splice(vi + 1, 0, { ...clone(msg.v2.blocks[vi]), id: id('block') });
+  if (action === 'move-v2-up') moveItem(msg.v2.blocks, vi, vi - 1);
+  if (action === 'move-v2-down') moveItem(msg.v2.blocks, vi, vi + 1);
+  rerenderAfterStructureChange();
+}
+function toggleSendMenu(event) {
+  event.stopPropagation();
+  const menu = $('sendDropdown');
+  const rect = event.currentTarget.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 6}px`;
+  menu.style.left = `${Math.min(Math.max(8, rect.right - 240), window.innerWidth - 250)}px`;
+  menu.classList.toggle('show');
+}
+function bind() {
+  $('loginForm').addEventListener('submit', login);
+  $('addMessageBtn').addEventListener('click', openAddMessageModal);
+  $('settingsBtn').addEventListener('click', () => $('targetSection').scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  $('jsonBtn').addEventListener('click', openJsonModal);
+  $('backupsBtn').addEventListener('click', openBackupsModal);
+  $('historyBtn').addEventListener('click', openHistoryModal);
+  $('shareBtn').addEventListener('click', () => copyText(JSON.stringify(projectData(), null, 2), 'Проект скопирован.'));
+  $('resetBtn').addEventListener('click', () => { if (confirm('Очистить проект?')) applyProject({ messages: [createMessage('v1')] }); });
+  $('sendBtn').addEventListener('click', sendActiveOrEdit);
+  $('sendMenuBtn').addEventListener('click', toggleSendMenu);
+  $('sendDropdown').addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-send-action]');
+    if (!btn) return;
+    closeMenus();
+    if (btn.dataset.sendAction === 'send-active') sendActiveOrEdit();
+    if (btn.dataset.sendAction === 'send-all') sendAll();
+    if (btn.dataset.sendAction === 'copy-payload') copyText(JSON.stringify({ channelId: channelId(), message: toApiMessage(activeMessage()) }, null, 2), 'Payload copied.');
+    if (btn.dataset.sendAction === 'download-project') downloadText(`lds-project-${Date.now()}.json`, JSON.stringify(projectData(), null, 2));
+  });
+  $('refreshChannelsBtn').addEventListener('click', () => loadChannels().then(() => { renderPreview(); setStatus('Каналы обновлены.'); }).catch((e) => setStatus(e.message, false)));
+  $('loadMessageBtn').addEventListener('click', loadExistingMessage);
+  $('channelSelect').addEventListener('change', () => { saveProjectDebounced(); renderPreview(); });
+  $('editMessageInput').addEventListener('input', saveProjectDebounced);
+  $('previewBtn').addEventListener('click', () => $('appView').classList.add('preview-mode'));
+  $('editorBtn').addEventListener('click', () => $('appView').classList.remove('preview-mode'));
+  $('refreshPreview').addEventListener('click', renderPreview);
+  $('modalClose').addEventListener('click', closeModal);
+  $('modalBackdrop').addEventListener('click', (event) => { if (event.target.id === 'modalBackdrop') closeModal(); });
+  $('messageList').addEventListener('input', handleInput);
+  $('messageList').addEventListener('change', handleInput);
+  $('messageList').addEventListener('click', handleClick);
+  document.addEventListener('click', (event) => { if (!event.target.closest('.dropdown') && !event.target.closest('#sendMenuBtn')) closeMenus(); });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeMenus(); closeModal(); } });
+}
+
+bind();
 bootstrap();
