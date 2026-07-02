@@ -198,3 +198,16 @@ input[type="color"] { padding: 2px; height: 38px; }
   .editor-headline, .section-line { align-items: stretch; flex-direction: column; }
   .top-actions { justify-content: flex-start; }
 }
+
+.pill.danger {
+  border-color: rgba(237, 66, 69, .45);
+  background: rgba(237, 66, 69, .14);
+  color: #ffb5b7;
+}
+.empty-box.bad {
+  border-color: rgba(237, 66, 69, .35);
+  color: #ffb5b7;
+}
+.message-card.broken {
+  border-color: rgba(237, 66, 69, .35);
+}

@@ -574,7 +574,18 @@ function miniCard(title, body, actions = '', open = true) {
 function renderMessages() {
   const list = $('messageList');
   list.innerHTML = '';
-  state.messages.forEach((msg, msgIndex) => list.appendChild(renderMessageCard(msg, msgIndex)));
+  state.messages.forEach((msg, msgIndex) => {
+    try {
+      list.appendChild(renderMessageCard(msg, msgIndex));
+    } catch (error) {
+      console.error('Failed to render message card:', error, msg);
+      const card = document.createElement('article');
+      card.className = `message-card broken ${msg.id === state.activeMessageId ? 'active' : ''}`.trim();
+      card.dataset.messageId = msg.id;
+      card.innerHTML = `<div class="card-head" data-set-active><div class="head-left"><span class="card-title">Сообщение ${msgIndex + 1}</span><span class="pill danger">Render error</span></div></div><div class="card-body"><div class="empty-box bad">Не получилось отрисовать редактор: ${escapeHtml(error?.message || error)}</div></div>`;
+      list.appendChild(card);
+    }
+  });
 }
 function scrollToMessageCard(messageId, smooth = true) {
   requestAnimationFrame(() => {
@@ -626,10 +637,18 @@ function renderV1Editor(msg, i) {
 }
 function renderV2Editor(msg, i) {
   const base = `messages.${i}`;
-  const settings = `<div class="grid-2"><label>Accent color${colorHtml(`${base}.v2.accentColor`, msg.v2.accentColor)}</label><div class="inline-row" style="align-self:end">${switchHtml(`${base}.v2.container`, msg.v2.container !== false, 'Wrap in container')}${switchHtml(`${base}.buttonsEnabled`, msg.buttonsEnabled !== false, 'Buttons enabled')}</div></div>`;
+  const settings = `<div class="grid-2"><label>Accent color${colorHtml(`${base}.v2.accentColor`, msg.v2.accentColor)}</label><div class="inline-row" style="align-self:end">${switchHtml(`${base}.v2.container`, Boolean(msg.v2.container), 'Wrap in container')}${switchHtml(`${base}.buttonsEnabled`, msg.buttonsEnabled !== false, 'Buttons enabled')}</div></div>`;
   const blocks = renderV2Blocks(msg, i);
   const buttons = renderButtons(msg, i);
   return `${renderBaseSections(msg, i)}${fold('V2 Settings', settings, { open: true })}${fold('Components V2', blocks, { open: true, actions: `<button class="btn small primary" type="button" data-action="add-v2-block">＋ Add</button>` })}${fold('Link buttons', buttons, { open: true, actions: `<button class="btn small primary" type="button" data-action="add-button">＋ Button</button>` })}`;
+}
+
+function renderV2Blocks(msg, i) {
+  const blocks = Array.isArray(msg?.v2?.blocks) ? msg.v2.blocks : [];
+  if (!blocks.length) {
+    return '<div class="empty-box">Components V2 пока нет. Нажми “+ Add” и выбери блок.</div>';
+  }
+  return `<div class="field-list">${blocks.map((block, blockIndex) => renderV2Block(msg, i, block, blockIndex)).join('')}</div>`;
 }
 function renderEmbeds(msg, i) {
   if (!msg.embeds.length) return '<div class="empty-box">Embeds пока нет. Нажми “+ Embed”.</div>';
