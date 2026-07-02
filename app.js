@@ -35,20 +35,43 @@ function setStatus(text = '', good = true) {
   el.className = `status ${text ? (good ? 'ok' : 'bad') : ''}`.trim();
   if (text) notify(text, good ? 'good' : 'bad');
 }
+function isAppsScriptProxy(base = state.apiBase) {
+  const value = String(base || '').toLowerCase();
+  return value.includes('script.google.com/macros/') || value.includes('script.googleusercontent.com/macros/') || value.includes('/macros/s/');
+}
+function splitApiPath(path) {
+  const raw = String(path || 'health');
+  const [cleanPath, queryString = ''] = raw.split('?');
+  const apiPath = cleanPath.replace(/^\/+/, '').replace(/^api\//i, '') || 'health';
+  const params = new URLSearchParams(queryString);
+  return { apiPath, params };
+}
 function apiUrl(path) {
-  const base = String(state.apiBase || '').trim().replace(/\/$/, '');
-  return base ? `${base}${path}` : path;
+  const baseRaw = String(state.apiBase || '').trim();
+  const base = baseRaw.replace(/\/$/, '');
+  if (!base) return path;
+  if (isAppsScriptProxy(base)) {
+    const { apiPath, params } = splitApiPath(path);
+    params.set('path', apiPath);
+    params.set('panelKey', state.apiKey || '');
+    return `${base}${base.includes('?') ? '&' : '?'}${params.toString()}`;
+  }
+  return `${base}${path}`;
 }
 async function api(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-  if (state.apiKey) {
+  const gasMode = isAppsScriptProxy();
+  const method = String(options.method || 'GET').toUpperCase();
+  const headers = gasMode
+    ? (method === 'POST' ? { 'Content-Type': 'text/plain;charset=utf-8' } : {})
+    : { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  if (!gasMode && state.apiKey) {
     headers['X-Web-Api-Key'] = state.apiKey;
     headers.Authorization = `Bearer ${state.apiKey}`;
   }
   const response = await fetch(apiUrl(path), {
     credentials: state.apiBase ? 'omit' : 'same-origin',
-    headers,
     ...options,
+    headers,
   });
   const raw = await response.text();
   let data = null;
@@ -972,7 +995,23 @@ function bindClicks() {
     state.apiBase = ($('apiBaseInput')?.value || '').trim();
     localStorage.setItem('lds_api_base', state.apiBase);
 
-    // Сначала пробуем режим WEB_API_KEY: бот в этом проекте чаще запускает именно src/web/apiServer.js.
+    if (isAppsScriptProxy(state.apiBase)) {
+      state.apiKey = password; // PANEL_ACCESS_KEY from Code.gs
+      state.authMode = 'apps-script';
+      localStorage.setItem('lds_api_key', state.apiKey);
+      localStorage.setItem('lds_auth_mode', state.authMode);
+      try {
+        await enterApp();
+        $('passwordInput').value = '';
+      } catch (appsScriptError) {
+        state.authMode = '';
+        localStorage.removeItem('lds_auth_mode');
+        $('loginError').textContent = `Apps Script: ${appsScriptError.message}`;
+      }
+      return;
+    }
+
+    // Direct WEB_API_KEY mode for local/server panel.
     state.apiKey = password;
     state.authMode = 'api-key';
     localStorage.setItem('lds_api_key', state.apiKey);
@@ -982,7 +1021,7 @@ function bindClicks() {
       $('passwordInput').value = '';
       return;
     } catch (apiKeyError) {
-      // Если сервер другой версии и поддерживает cookie-login, пробуем /api/login.
+      // Fallback for old cookie-login server.
       state.apiKey = '';
       state.authMode = 'session';
       localStorage.removeItem('lds_api_key');
