@@ -10,6 +10,9 @@ const state = {
   guilds: [],
   messages: [],
   activeMessageId: null,
+  apiBase: localStorage.getItem('lds_api_base') || (location.protocol === 'file:' ? 'http://localhost:13579' : ''),
+  apiKey: localStorage.getItem('lds_api_key') || '',
+  authMode: localStorage.getItem('lds_auth_mode') || '',
 };
 
 function uid(prefix = 'id') {
@@ -32,13 +35,28 @@ function setStatus(text = '', good = true) {
   el.className = `status ${text ? (good ? 'ok' : 'bad') : ''}`.trim();
   if (text) notify(text, good ? 'good' : 'bad');
 }
+function apiUrl(path) {
+  const base = String(state.apiBase || '').trim().replace(/\/$/, '');
+  return base ? `${base}${path}` : path;
+}
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  if (state.apiKey) {
+    headers['X-Web-Api-Key'] = state.apiKey;
+    headers.Authorization = `Bearer ${state.apiKey}`;
+  }
+  const response = await fetch(apiUrl(path), {
+    credentials: state.apiBase ? 'omit' : 'same-origin',
+    headers,
     ...options,
   });
-  const data = await response.json().catch(() => ({ ok: false, error: 'Bad response' }));
+  const raw = await response.text();
+  let data = null;
+  try { data = raw ? JSON.parse(raw) : {}; }
+  catch {
+    const sample = raw.slice(0, 120).replace(/\s+/g, ' ').trim();
+    throw new Error(sample ? `Bad response: ${sample}` : `Bad response: HTTP ${response.status}`);
+  }
   if (!response.ok || data.ok === false) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
 }
@@ -786,17 +804,42 @@ function findEmbed(message, embedId) { return (message.embeds || []).find((e) =>
 function findPart(message, partId) { return (message.parts || []).find((p) => p.id === partId); }
 
 async function loadMe() {
-  const data = await api('/api/me');
-  state.bot = data.bot || null;
-  $('botTag').textContent = data.bot?.tag || 'Bot';
+  try {
+    const data = await api('/api/me');
+    state.bot = data.bot || null;
+  } catch {
+    const data = await api('/api/health');
+    const tag = data.bot || 'Bot';
+    state.bot = { tag, username: String(tag).split('#')[0] || 'Bot', avatarUrl: '' };
+  }
+  $('botTag').textContent = state.bot?.tag || 'Bot';
 }
 async function loadChannels() {
   const data = await api('/api/channels');
-  state.guilds = data.guilds || [];
-  const select = $('channelSelect'); select.innerHTML = '';
+  const select = $('channelSelect');
+  select.innerHTML = '';
+  if (Array.isArray(data.guilds)) {
+    state.guilds = data.guilds || [];
+  } else if (Array.isArray(data.channels)) {
+    const byGuild = new Map();
+    for (const channel of data.channels) {
+      const key = channel.guildId || channel.guildName || 'guild';
+      if (!byGuild.has(key)) byGuild.set(key, { id: channel.guildId || key, name: channel.guildName || 'Server', channels: [] });
+      byGuild.get(key).channels.push(channel);
+    }
+    state.guilds = [...byGuild.values()];
+  } else {
+    state.guilds = [];
+  }
   state.guilds.forEach((guild) => {
-    const group = document.createElement('optgroup'); group.label = guild.name;
-    (guild.channels || []).forEach((channel) => { const option = document.createElement('option'); option.value = channel.id; option.textContent = `#${channel.name}`; group.appendChild(option); });
+    const group = document.createElement('optgroup');
+    group.label = guild.name;
+    (guild.channels || []).forEach((channel) => {
+      const option = document.createElement('option');
+      option.value = channel.id;
+      option.textContent = channel.label || `#${channel.name}`;
+      group.appendChild(option);
+    });
     select.appendChild(group);
   });
   if (!select.options.length) { const option = document.createElement('option'); option.value = ''; option.textContent = 'No sendable channels'; select.appendChild(option); }
@@ -809,21 +852,33 @@ async function sendPayload() {
   $('sendBtn').disabled = true;
   const old = $('sendBtn').textContent; $('sendBtn').textContent = 'Отправка...';
   try {
-    const data = await api('/api/send', { method: 'POST', body: JSON.stringify(payload) });
-    const history = readHistory(); history.unshift({ type: data.edited ? 'edit' : 'send', at: new Date().toISOString(), url: data.url || '', project: buildProject() }); writeHistory(history.slice(0, 25));
-    setStatus(`${data.edited ? 'Изменено' : 'Отправлено'}: ${data.url}`);
+    const editTarget = String(payload.editMessage || '').trim();
+    const isApiKeyMode = state.authMode === 'api-key' || Boolean(state.apiKey);
+    const data = editTarget && isApiKeyMode
+      ? await api('/api/edit', { method: 'POST', body: JSON.stringify({ channelId: payload.channelId, messageId: editTarget, message: payload }) })
+      : await api('/api/send', { method: 'POST', body: JSON.stringify(payload) });
+    const history = readHistory(); history.unshift({ type: data.edited ? 'edit' : (editTarget && isApiKeyMode ? 'edit' : 'send'), at: new Date().toISOString(), url: data.url || '', project: buildProject() }); writeHistory(history.slice(0, 25));
+    setStatus(`${(data.edited || (editTarget && isApiKeyMode)) ? 'Изменено' : 'Отправлено'}: ${data.url || data.messageId || 'ok'}`);
   } catch (error) { setStatus(error.message, false); }
   finally { $('sendBtn').disabled = false; $('sendBtn').textContent = old; }
 }
+async function enterApp() {
+  await loadMe();
+  await loadChannels();
+  $('loginView').classList.add('hidden');
+  $('appView').classList.remove('hidden');
+  if (!state.messages.length) { const msg = createV1Message(); state.messages = [msg]; state.activeMessageId = msg.id; }
+  renderAll();
+}
 async function bootstrap() {
-  try {
-    await loadMe();
-    await loadChannels();
-    $('loginView').classList.add('hidden');
-    $('appView').classList.remove('hidden');
-    if (!state.messages.length) { const msg = createV1Message(); state.messages = [msg]; state.activeMessageId = msg.id; }
-    renderAll();
-  } catch {
+  if ($('apiBaseInput')) $('apiBaseInput').value = state.apiBase || '';
+  if (!state.apiKey && state.authMode !== 'session') {
+    $('appView').classList.add('hidden');
+    $('loginView').classList.remove('hidden');
+    return;
+  }
+  try { await enterApp(); }
+  catch {
     $('appView').classList.add('hidden');
     $('loginView').classList.remove('hidden');
   }
@@ -913,8 +968,35 @@ function bindClicks() {
   $('loginForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     $('loginError').textContent = '';
-    try { await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('passwordInput').value }) }); $('passwordInput').value = ''; await bootstrap(); }
-    catch (error) { $('loginError').textContent = error.message; }
+    const password = $('passwordInput').value;
+    state.apiBase = ($('apiBaseInput')?.value || '').trim();
+    localStorage.setItem('lds_api_base', state.apiBase);
+
+    // Сначала пробуем режим WEB_API_KEY: бот в этом проекте чаще запускает именно src/web/apiServer.js.
+    state.apiKey = password;
+    state.authMode = 'api-key';
+    localStorage.setItem('lds_api_key', state.apiKey);
+    localStorage.setItem('lds_auth_mode', state.authMode);
+    try {
+      await enterApp();
+      $('passwordInput').value = '';
+      return;
+    } catch (apiKeyError) {
+      // Если сервер другой версии и поддерживает cookie-login, пробуем /api/login.
+      state.apiKey = '';
+      state.authMode = 'session';
+      localStorage.removeItem('lds_api_key');
+      localStorage.setItem('lds_auth_mode', state.authMode);
+      try {
+        await api('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
+        await enterApp();
+        $('passwordInput').value = '';
+      } catch (sessionError) {
+        state.authMode = '';
+        localStorage.removeItem('lds_auth_mode');
+        $('loginError').textContent = `API-key: ${apiKeyError.message}; session: ${sessionError.message}`;
+      }
+    }
   });
   $('addMessageBtn').addEventListener('click', openAddMessageModal);
   $('backupsBtn').addEventListener('click', openBackupsModal);
