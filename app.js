@@ -1,217 +1,1059 @@
-const $ = (selector, root = document) => root.querySelector(selector);
+const $ = (id) => document.getElementById(id);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-const els = {
-  status: $('#status'), apiUrl: $('#apiUrl'), apiKey: $('#apiKey'), channelSelect: $('#channelSelect'),
-  roleSelect: $('#roleSelect'), memberQuery: $('#memberQuery'), memberSelect: $('#memberSelect'),
-  emojiSelect: $('#emojiSelect'), unicodeEmojiSelect: $('#unicodeEmojiSelect'), content: $('#content'),
-  allowUserPings: $('#allowUserPings'), allowRolePings: $('#allowRolePings'), buttonsEnabled: $('#buttonsEnabled'),
-  embeds: $('#embeds'), buttons: $('#buttons'), v2Blocks: $('#v2Blocks'), v2Container: $('#v2Container'),
-  v2ButtonsEnabled: $('#v2ButtonsEnabled'), v2AccentColor: $('#v2AccentColor'), preview: $('#preview'), result: $('#result'),
-  jsonBox: $('#jsonBox'), editMessageId: $('#editMessageId'), classicCard: $('#classicCard'), embedCard: $('#embedCard'), v2Card: $('#v2Card')
+const BACKUP_KEY = 'lds_black_panel_backups_v2';
+const HISTORY_KEY = 'lds_black_panel_history_v2';
+const TEMPLATE_KEY = 'lds_black_panel_templates_v2';
+
+const state = {
+  bot: null,
+  guilds: [],
+  messages: [],
+  activeMessageId: null,
 };
 
-const STOCK_EMOJIS = ['😀','😄','😁','😂','🤣','😊','😎','🥳','😺','😸','❤️','💙','💜','🖤','🤍','🔥','✨','⭐','⚡','✅','❌','⚠️','📌','📢','🔔','🎉','🎁','🏆','💎','🛠️','🚧','🚌','🚎','🚃','🌙','☀️','🌈','🍪','☕','🎮','🧩','📷','📝','🔗','🔒','🔓','⬆️','⬇️','➡️','⬅️'];
-let channels = [];
-let serverEmojis = [];
-let lastTextTarget = els.content;
-
-function setStatus(text, kind = '') { els.status.textContent = text; els.status.className = `status ${kind}`.trim(); }
-function setResult(text, kind = '') { els.result.textContent = text; els.result.className = `result ${kind}`.trim(); }
-function getApiUrl() { return normalizeApiUrl(els.apiUrl.value); }
-function getApiKey() { return els.apiKey.value.trim(); }
-function isV2Mode() { return $('[name="messageMode"]:checked')?.value === 'v2'; }
-
-function normalizeApiUrl(value) {
-  let raw = String(value || '').trim().replace(/\s+/g, '').replace(/\/+$/, '');
-  raw = raw.replace(/:(\d+):(\d+)(?=\/|$)/, ':$1');
-  raw = raw.replace(/\/api\/(health|channels|roles|members|emojis|message|send|edit)$/i, '');
-  return raw;
+function uid(prefix = 'id') {
+  return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
-function isAppsScriptUrl(url) { return /^https:\/\/script\.google\.com\/macros\/s\//i.test(url); }
-function buildUrl(path) {
-  const base = getApiUrl();
-  if (!base) throw new Error('API URL is empty');
-
-  if (isAppsScriptUrl(base)) {
-    const [rawPath, rawQuery = ''] = String(path || '').split('?');
-    const cleanPath = rawPath.replace(/^\/api\//, '').replace(/^\//, '');
-    const sep = base.includes('?') ? '&' : '?';
-    const key = encodeURIComponent(getApiKey());
-    const query = rawQuery ? `&${rawQuery}` : '';
-
-    // Apps Script receives the API route in path= and all original query params separately.
-    // This is required for guildId/channelId/messageId, otherwise roles/emojis/members cannot load.
-    return `${base}${sep}path=${encodeURIComponent(cleanPath)}&panelKey=${key}${query}`;
-  }
-
-  return `${base}${path}`;
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch]));
+}
+function notify(text, kind = '') {
+  if (!text) return;
+  const toast = document.createElement('div');
+  toast.className = `toast ${kind}`.trim();
+  toast.textContent = text;
+  $('toastWrap').appendChild(toast);
+  setTimeout(() => toast.remove(), 3200);
+}
+function setStatus(text = '', good = true) {
+  const el = $('statusLine');
+  el.textContent = text;
+  el.className = `status ${text ? (good ? 'ok' : 'bad') : ''}`.trim();
+  if (text) notify(text, good ? 'good' : 'bad');
 }
 async function api(path, options = {}) {
-  const key = getApiKey();
-  if (!key) throw new Error('Panel key is empty');
-  const method = (options.method || 'GET').toUpperCase();
-  const viaAppsScript = isAppsScriptUrl(getApiUrl());
-  const fetchOptions = { method, redirect: 'follow' };
-  if (viaAppsScript) {
-    if (options.body !== undefined) {
-      fetchOptions.body = options.body;
-      fetchOptions.headers = { 'Content-Type': 'text/plain;charset=utf-8' };
-    }
-  } else {
-    fetchOptions.headers = { 'Content-Type': 'application/json', 'X-Web-Api-Key': key, ...(options.headers || {}) };
-    if (options.body !== undefined) fetchOptions.body = options.body;
-  }
-  const response = await fetch(buildUrl(path), fetchOptions);
-  const bodyText = await response.text();
-  let data;
-  try { data = bodyText ? JSON.parse(bodyText) : {}; } catch { throw new Error(bodyText || `HTTP ${response.status}`); }
+  const response = await fetch(path, {
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options,
+  });
+  const data = await response.json().catch(() => ({ ok: false, error: 'Bad response' }));
   if (!response.ok || data.ok === false) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
 }
-
-function selectedGuildId() { return els.channelSelect.selectedOptions[0]?.dataset.guildId || ''; }
-async function testConnection() { try { const d = await api('/api/health'); setStatus(`Connected: ${d.bot || 'bot'}`, 'ok'); } catch (e) { setStatus('Connection failed', 'bad'); setResult(e.message, 'bad'); } }
-async function loadChannels() {
-  try {
-    const data = await api('/api/channels'); channels = data.channels || []; els.channelSelect.innerHTML = '';
-    for (const ch of channels) { const o = document.createElement('option'); o.value = ch.id; o.textContent = ch.label; o.dataset.guildId = ch.guildId; els.channelSelect.appendChild(o); }
-    setResult(`Loaded channels: ${channels.length}`, 'ok'); renderPreview();
-  } catch (e) { setResult(e.message, 'bad'); }
-}
-async function loadRoles() {
-  try {
-    const guildId = selectedGuildId(); if (!guildId) throw new Error('Select a channel first');
-    const data = await api(`/api/roles?guildId=${encodeURIComponent(guildId)}`); els.roleSelect.innerHTML = '';
-    for (const role of data.roles || []) { const o = document.createElement('option'); o.value = role.id; o.textContent = `${role.name} (${role.id})`; els.roleSelect.appendChild(o); }
-    setResult(`Loaded roles: ${(data.roles || []).length}`, 'ok');
-  } catch (e) { setResult(e.message, 'bad'); }
-}
-async function loadMembers() {
-  try {
-    const guildId = selectedGuildId(); if (!guildId) throw new Error('Select a channel first');
-    const query = els.memberQuery.value.trim(); const data = await api(`/api/members?guildId=${encodeURIComponent(guildId)}&query=${encodeURIComponent(query)}`);
-    els.memberSelect.innerHTML = '';
-    for (const m of data.members || []) { const o = document.createElement('option'); o.value = m.id; const label = m.displayName || m.globalName || m.username || m.id; o.textContent = `${label} (${m.id})`; els.memberSelect.appendChild(o); }
-    setResult(`Loaded users: ${(data.members || []).length}`, 'ok');
-  } catch (e) { setResult(e.message, 'bad'); }
-}
-async function loadEmojis() {
-  try {
-    const guildId = selectedGuildId(); if (!guildId) throw new Error('Select a channel first');
-    const data = await api(`/api/emojis?guildId=${encodeURIComponent(guildId)}`); serverEmojis = data.emojis || [];
-    els.emojiSelect.innerHTML = '';
-    for (const emoji of serverEmojis) { const o = document.createElement('option'); o.value = emoji.mention; o.textContent = `${emoji.animated ? 'a:' : ':'}${emoji.name}:`; els.emojiSelect.appendChild(o); }
-    setResult(`Loaded server emojis: ${serverEmojis.length}`, 'ok');
-  } catch (e) { setResult(e.message, 'bad'); }
-}
-function getSelectedEmoji() { return els.emojiSelect.value || els.unicodeEmojiSelect.value || ''; }
-function initUnicodeEmojis() { els.unicodeEmojiSelect.innerHTML = STOCK_EMOJIS.map(e => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join(''); }
-
-function trackTextTarget(event) { if (event.target.matches('textarea,input')) lastTextTarget = event.target; }
-function insertAtCursor(target, text) {
-  const input = target || lastTextTarget || els.content; const start = input.selectionStart ?? input.value.length; const end = input.selectionEnd ?? input.value.length;
-  input.value = input.value.slice(0, start) + text + input.value.slice(end); input.focus(); input.selectionStart = input.selectionEnd = start + text.length; renderPreview();
-}
-function insertRoleMention() { if (els.roleSelect.value) insertAtCursor(lastTextTarget, `<@&${els.roleSelect.value}>`); }
-function insertUserMention() { if (els.memberSelect.value) insertAtCursor(lastTextTarget, `<@${els.memberSelect.value}>`); }
-function insertEmoji() { const emoji = getSelectedEmoji(); if (emoji) insertAtCursor(lastTextTarget, emoji); }
-async function copyEmoji() { const emoji = getSelectedEmoji(); if (!emoji) return; await navigator.clipboard?.writeText(emoji).catch(() => null); setResult(`Emoji copied: ${emoji}`, 'ok'); }
-
-function setNested(target, path, value) { const parts = path.split('.'); let cur = target; for (let i = 0; i < parts.length - 1; i++) { cur[parts[i]] ||= {}; cur = cur[parts[i]]; } cur[parts.at(-1)] = value; }
-function getNested(source, path) { return path.split('.').reduce((cur, part) => cur?.[part], source); }
-function normalizeHex(value) { const raw = String(value || '').trim(); if (/^#[0-9a-f]{6}$/i.test(raw)) return raw; if (/^[0-9a-f]{6}$/i.test(raw)) return `#${raw}`; return '#5865f2'; }
-
-function addEmbed(data = {}) {
-  const node = $('#embedTemplate').content.firstElementChild.cloneNode(true);
-  $('.remove-embed', node).addEventListener('click', () => { node.remove(); renderPreview(); });
-  $('.add-field', node).addEventListener('click', () => addField(node));
-  setEmbedData(node, data); els.embeds.appendChild(node); node.addEventListener('input', renderPreview); node.addEventListener('change', renderPreview); renderPreview(); return node;
-}
-function addField(embedNode, data = {}) {
-  const node = $('#fieldTemplate').content.firstElementChild.cloneNode(true);
-  $('[data-field="name"]', node).value = data.name || ''; $('[data-field="value"]', node).value = data.value || ''; $('[data-field="inline"]', node).checked = Boolean(data.inline);
-  $('.remove-field', node).addEventListener('click', () => { node.remove(); renderPreview(); }); $('.fields', embedNode).appendChild(node); node.addEventListener('input', renderPreview); node.addEventListener('change', renderPreview); renderPreview();
-}
-function setEmbedData(node, data) { for (const input of $$('[data-key]', node)) { const value = getNested(data, input.dataset.key) ?? ''; if (input.type === 'checkbox') input.checked = Boolean(value); else if (input.type === 'color') input.value = normalizeHex(value || '#5865f2'); else input.value = value; } $('.fields', node).innerHTML = ''; for (const field of data.fields || []) addField(node, field); }
-function readEmbed(node) { const embed = {}; for (const input of $$('[data-key]', node)) { const value = input.type === 'checkbox' ? input.checked : input.value.trim(); if (value || input.type === 'checkbox') setNested(embed, input.dataset.key, value); } embed.fields = $$('.field-editor', node).map(readField).filter(f => f.name || f.value); return embed; }
-function readField(node) { return { name: $('[data-field="name"]', node).value.trim(), value: $('[data-field="value"]', node).value.trim(), inline: $('[data-field="inline"]', node).checked }; }
-
-function addButton(data = {}) {
-  const node = $('#buttonTemplate').content.firstElementChild.cloneNode(true);
-  $('[data-button="enabled"]', node).checked = data.enabled !== false; $('[data-button="label"]', node).value = data.label || ''; $('[data-button="emoji"]', node).value = data.emoji || ''; $('[data-button="url"]', node).value = data.url || '';
-  $('.use-selected-emoji', node).addEventListener('click', () => { $('[data-button="emoji"]', node).value = getSelectedEmoji(); renderPreview(); });
-  $('.remove-button', node).addEventListener('click', () => { node.remove(); renderPreview(); }); els.buttons.appendChild(node); node.addEventListener('input', renderPreview); node.addEventListener('change', renderPreview); renderPreview();
-}
-function readButton(node) { return { enabled: $('[data-button="enabled"]', node).checked, label: $('[data-button="label"]', node).value.trim(), emoji: $('[data-button="emoji"]', node).value.trim(), url: $('[data-button="url"]', node).value.trim() }; }
-
-function addV2Block(type, data = {}) {
-  const node = $('#v2BlockTemplate').content.firstElementChild.cloneNode(true); node.dataset.v2Type = type;
-  const body = $('.v2-body', node); const label = $('.v2-label', node);
-  if (type === 'text') { label.textContent = 'Text Display'; body.innerHTML = '<label>Text</label><textarea data-v2="text" rows="4" placeholder="# Header\nText..."></textarea>'; $('[data-v2="text"]', body).value = data.text || data.content || ''; }
-  if (type === 'section') { label.textContent = 'Section + accessory button'; body.innerHTML = '<label>Section text</label><textarea data-v2="text" rows="3"></textarea><div class="grid3"><div><label>Button label</label><input data-v2="button.label" maxlength="80"></div><div><label>Button emoji</label><input data-v2="button.emoji" placeholder="😀 or <:name:id>"></div><div><label>Button URL</label><input data-v2="button.url" placeholder="https://..."></div></div><label class="switch"><input data-v2="button.enabled" type="checkbox" checked> Button enabled</label>'; $('[data-v2="text"]', body).value = data.text || ''; $('[data-v2="button.label"]', body).value = data.button?.label || ''; $('[data-v2="button.emoji"]', body).value = data.button?.emoji || ''; $('[data-v2="button.url"]', body).value = data.button?.url || ''; $('[data-v2="button.enabled"]', body).checked = data.button?.enabled !== false; }
-  if (type === 'separator') { label.textContent = 'Separator'; body.innerHTML = '<label class="switch"><input data-v2="divider" type="checkbox" checked> Divider</label><label>Spacing</label><select data-v2="spacing"><option value="1">Small</option><option value="2">Large</option></select>'; $('[data-v2="divider"]', body).checked = data.divider !== false; $('[data-v2="spacing"]', body).value = String(data.spacing || 1); }
-  if (type === 'media') { label.textContent = 'Media Gallery'; body.innerHTML = '<label>Image / media URL</label><input data-v2="url" placeholder="https://...">'; $('[data-v2="url"]', body).value = data.url || ''; }
-  $('.remove-v2', node).addEventListener('click', () => { node.remove(); renderPreview(); });
-  els.v2Blocks.appendChild(node); node.addEventListener('input', renderPreview); node.addEventListener('change', renderPreview); renderPreview(); return node;
-}
-function readV2Block(node) {
-  const type = node.dataset.v2Type;
-  if (type === 'text') return { type: 'text', text: $('[data-v2="text"]', node).value };
-  if (type === 'separator') return { type: 'separator', divider: $('[data-v2="divider"]', node).checked, spacing: Number($('[data-v2="spacing"]', node).value || 1) };
-  if (type === 'media') return { type: 'media', url: $('[data-v2="url"]', node).value.trim() };
-  if (type === 'section') return { type: 'section', text: $('[data-v2="text"]', node).value, button: { enabled: $('[data-v2="button.enabled"]', node).checked, label: $('[data-v2="button.label"]', node).value.trim(), emoji: $('[data-v2="button.emoji"]', node).value.trim(), url: $('[data-v2="button.url"]', node).value.trim() } };
-  return { type: 'text', text: '' };
-}
-
-function buildMessage() {
+function createEmbed() {
   return {
-    content: els.content.value,
-    useV2: isV2Mode(),
-    allowUserPings: els.allowUserPings.checked,
-    allowRolePings: els.allowRolePings.checked,
-    buttonsEnabled: els.buttonsEnabled.checked,
-    embeds: $$('.embed-editor', els.embeds).map(readEmbed),
-    buttons: $$('.button-editor', els.buttons).map(readButton).filter(b => b.label && b.url),
-    v2: { enabled: isV2Mode(), container: els.v2Container.checked, accentColor: els.v2AccentColor.value, buttonsEnabled: els.v2ButtonsEnabled.checked, blocks: $$('.v2-block', els.v2Blocks).map(readV2Block) }
+    id: uid('embed'),
+    open: true,
+    authorName: '', authorIcon: '', authorUrl: '',
+    title: '', url: '', color: '#5865f2', description: '',
+    fields: [], image: '', thumbnail: '',
+    footerText: '', footerIcon: '', timestamp: false,
   };
 }
-function buildRequest() { return { channelId: els.channelSelect.value, message: buildMessage() }; }
+function createField() {
+  return { id: uid('field'), name: '', value: '', inline: false };
+}
+function createV1Row() {
+  return { id: uid('row'), open: true, items: [] };
+}
+function createV1Message() {
+  return {
+    id: uid('msg'),
+    type: 'v1',
+    open: true,
+    title: '',
+    content: '',
+    threadName: '',
+    threadId: '',
+    profileName: '',
+    profileAvatar: '',
+    files: [],
+    embeds: [],
+    rows: [],
+    pings: { users: true, roles: true },
+  };
+}
+function createV2Message() {
+  return {
+    id: uid('msg'),
+    type: 'v2',
+    open: true,
+    threadName: '',
+    threadId: '',
+    profileName: '',
+    profileAvatar: '',
+    files: [],
+    parts: [],
+    pings: { users: true, roles: true },
+  };
+}
+function createContentPart() {
+  return { id: uid('part'), type: 'content', open: true, text: '', accessory: null };
+}
+function createContainerPart() {
+  return { id: uid('part'), type: 'container', open: true, embeds: [createEmbed()], parts: [] };
+}
+function createMediaGalleryPart() {
+  return { id: uid('part'), type: 'media', open: true, urls: [''] };
+}
+function createFilePart() {
+  return { id: uid('part'), type: 'file', open: true, filename: '', url: '' };
+}
+function createSeparatorPart() {
+  return { id: uid('part'), type: 'separator', open: true, spacing: 'small', divider: true };
+}
+function createRowPart() {
+  return { id: uid('part'), type: 'row', open: true, items: [] };
+}
+function createComponent(type) {
+  return {
+    id: uid('cmp'), type,
+    label: '', url: '', placeholder: '', customId: '',
+  };
+}
+function currentMessage() {
+  return state.messages.find((m) => m.id === state.activeMessageId) || state.messages[0] || null;
+}
+function prettyComponentType(type) {
+  return {
+    button: 'Кнопка',
+    link: 'Кнопка с Ссылкой',
+    select: 'Меню Выбора',
+    userSelect: 'Меню Выбора Пользователей',
+    roleSelect: 'Меню Выбора Ролей',
+    mentionableSelect: 'Меню Выбора Пользователей и Ролей',
+    channelSelect: 'Меню Выбора Каналов',
+  }[type] || type;
+}
 
-function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch])); }
-function linkifyMentions(value) { return escapeHtml(value).replace(/&lt;@&amp;(\d+)&gt;/g, '<span class="mention">@role:$1</span>').replace(/&lt;@(\d+)&gt;/g, '<span class="mention">@user:$1</span>').replace(/&lt;a?:([A-Za-z0-9_]+):(\d+)&gt;/g, '<span class="mention">:$1:</span>'); }
+function cloneEmbedDeep(embed) {
+  const c = structuredClone(embed);
+  c.id = uid('embed');
+  c.fields = (c.fields || []).map((f) => ({ ...f, id: uid('field') }));
+  return c;
+}
+function cloneRowDeep(row) {
+  const c = structuredClone(row);
+  c.id = uid('row');
+  c.items = (c.items || []).map((i) => ({ ...i, id: uid('cmp') }));
+  return c;
+}
+function clonePartDeep(part) {
+  const c = structuredClone(part);
+  c.id = uid('part');
+  if (c.type === 'container') {
+    c.embeds = (c.embeds || []).map(cloneEmbedDeep);
+    c.parts = (c.parts || []).map(clonePartDeep);
+  }
+  if (c.type === 'row') {
+    c.items = (c.items || []).map((i) => ({ ...i, id: uid('cmp') }));
+  }
+  if (c.type === 'content' && c.accessory) c.accessory = { ...c.accessory, id: uid('cmp') };
+  return c;
+}
+function cloneMessageDeep(message) {
+  const c = structuredClone(message);
+  c.id = uid('msg');
+  c.files = (c.files || []).map((f) => ({ ...f }));
+  if (c.type === 'v1') {
+    c.embeds = (c.embeds || []).map(cloneEmbedDeep);
+    c.rows = (c.rows || []).map(cloneRowDeep);
+  } else {
+    c.parts = (c.parts || []).map(clonePartDeep);
+  }
+  return c;
+}
+
+function prettyPartType(type) {
+  return {
+    content: 'Содержимое',
+    container: 'Container',
+    media: 'Media Gallery',
+    file: 'Файл',
+    separator: 'Разделитель',
+    row: 'Строка',
+  }[type] || type;
+}
+
+function renderAll() {
+  if (!state.messages.length) {
+    const msg = createV1Message();
+    state.messages = [msg];
+    state.activeMessageId = msg.id;
+  }
+  renderMessages();
+  renderPreview();
+}
+
+function renderMessages() {
+  const wrap = $('messageList');
+  wrap.innerHTML = '';
+  state.messages.forEach((message, index) => {
+    const card = document.createElement('div');
+    card.className = `message-card ${message.open ? '' : 'collapsed'}`.trim();
+    card.dataset.messageId = message.id;
+
+    const header = document.createElement('div');
+    header.className = 'message-header';
+    const left = document.createElement('div');
+    left.className = 'message-left';
+    left.innerHTML = `<span class="chev">⌄</span><span>Сообщение ${index + 1}</span>${message.type === 'v2' ? '<span class="pill-type">V2</span>' : ''}`;
+    const tools = document.createElement('div');
+    tools.className = 'message-tools';
+    tools.innerHTML = `
+      <button class="icon-btn" data-action="editMessage" title="Выбрать">✎</button>
+      <button class="icon-btn" data-action="duplicateMessage" title="Дублировать">⧉</button>
+      <button class="icon-btn" data-action="deleteMessage" title="Удалить">🗑</button>
+    `;
+    header.append(left, tools);
+    header.addEventListener('click', (event) => {
+      if (event.target.closest('.icon-btn')) return;
+      message.open = !message.open;
+      state.activeMessageId = message.id;
+      renderAll();
+    });
+
+    const body = document.createElement('div');
+    body.className = 'message-body';
+
+    if (message.type === 'v1') body.appendChild(renderV1Message(message, index));
+    else body.appendChild(renderV2Message(message, index));
+
+    card.append(header, body);
+    wrap.appendChild(card);
+  });
+}
+
+function renderV1Message(message, index) {
+  const root = document.createElement('div');
+  root.className = 'message-v1';
+
+  const contentSection = document.createElement('div');
+  contentSection.className = 'message-pad';
+  contentSection.innerHTML = `
+    <div class="counter-line">Содержимое <span>${message.content.length}/2000</span></div>
+    <textarea data-bind="content" data-message-id="${message.id}" placeholder="Введите содержимое сообщения"></textarea>
+    <div class="switch-row" style="margin-top:10px">
+      ${switchMarkup(`pingUsers_${message.id}`, 'Пинги пользователей', message.pings.users)}
+      ${switchMarkup(`pingRoles_${message.id}`, 'Пинги ролей', message.pings.roles)}
+    </div>
+  `;
+  contentSection.querySelector('textarea').value = message.content;
+
+  const subs = document.createElement('div');
+  subs.className = 'subsection-list';
+  subs.append(
+    createFoldSection('Ветка', `
+      <div class="help-line">Вебхук могут создавать и использовать ветки. <a href="#">Как мне использовать это?</a></div>
+      <label class="fieldline">Название Ветки Форума <span class="small-note">${message.threadName.length}/100</span><input data-bind="threadName" data-message-id="${message.id}" maxlength="100"></label>
+      <label class="fieldline">ID Ветки <span class="small-note">${message.threadId.length}/30</span><input data-bind="threadId" data-message-id="${message.id}" maxlength="30"></label>
+    `),
+    createFoldSection('Профиль', `
+      <label class="fieldline">Имя <span class="small-note">${message.profileName.length}/80</span><input data-bind="profileName" data-message-id="${message.id}" maxlength="80"></label>
+      <label class="fieldline">Ссылка на Аватар<input data-bind="profileAvatar" data-message-id="${message.id}"></label>
+    `),
+    createFoldSection(`Файлы (${message.files.length}/10)`, `
+      <div class="controls-row"><button class="btn primary small" data-action="addMockFile" data-message-id="${message.id}">Добавить Файл</button><button class="btn secondary small" data-action="pasteFile" data-message-id="${message.id}">Вставить Файл</button></div>
+      <div class="help-line">Characters: 0/4000</div>
+      ${(message.files || []).map((file, i) => `<div class="field-card"><div class="field-card-top"><strong>${escapeHtml(file.name || `file_${i+1}.png`)}</strong><button class="btn danger small" data-action="removeFile" data-message-id="${message.id}" data-index="${i}">Удалить</button></div><label>URL файла<input data-file-bind="url" data-message-id="${message.id}" data-index="${i}" value="${escapeHtml(file.url || '')}"></label></div>`).join('')}
+    `)
+  );
+
+  const embedList = document.createElement('div');
+  message.embeds.forEach((embed, embedIndex) => embedList.appendChild(renderEmbedCard(message, embed, embedIndex)));
+  const rowList = document.createElement('div');
+  message.rows.forEach((row, rowIndex) => rowList.appendChild(renderRowCard(message, row, rowIndex, false)));
+
+  const footer = document.createElement('div');
+  footer.className = 'card-footer-row';
+  footer.innerHTML = `
+    <button class="btn primary" data-action="addV1" data-message-id="${message.id}">Добавить ⌄</button>
+    <button class="btn secondary" data-action="setLink" data-message-id="${message.id}">Set Link</button>
+    <button class="btn secondary" data-action="messageOptions" data-message-id="${message.id}">Опции ⌄</button>
+  `;
+
+  root.append(contentSection, subs, embedList, rowList, footer);
+  return root;
+}
+
+function renderV2Message(message, index) {
+  const root = document.createElement('div');
+  root.className = 'message-v2';
+
+  const subs = document.createElement('div');
+  subs.className = 'subsection-list';
+  subs.append(
+    createFoldSection('Ветка', `
+      <div class="help-line">Вебхук могут создавать и использовать ветки. <a href="#">Как мне использовать это?</a></div>
+      <label class="fieldline">Название Ветки Форума <span class="small-note">${message.threadName.length}/100</span><input data-bind="threadName" data-message-id="${message.id}" maxlength="100"></label>
+      <label class="fieldline">ID Ветки <span class="small-note">${message.threadId.length}/30</span><input data-bind="threadId" data-message-id="${message.id}" maxlength="30"></label>
+    `),
+    createFoldSection('Профиль', `
+      <label class="fieldline">Имя <span class="small-note">${message.profileName.length}/80</span><input data-bind="profileName" data-message-id="${message.id}" maxlength="80"></label>
+      <label class="fieldline">Ссылка на Аватар<input data-bind="profileAvatar" data-message-id="${message.id}"></label>
+    `),
+    createFoldSection(`Файлы (${message.files.length}/10)`, `<div class="controls-row"><button class="btn primary small" data-action="addMockFile" data-message-id="${message.id}">Добавить Файл</button></div>`) 
+  );
+
+  const partList = document.createElement('div');
+  (message.parts || []).forEach((part, partIndex) => partList.appendChild(renderV2PartCard(message, part, partIndex)));
+
+  const footer = document.createElement('div');
+  footer.className = 'card-footer-row';
+  footer.innerHTML = `
+    <button class="btn primary" data-action="addV2" data-message-id="${message.id}">Добавить ⌄</button>
+    <button class="btn secondary" data-action="setLink" data-message-id="${message.id}">Set Link</button>
+    <button class="btn secondary" data-action="messageOptions" data-message-id="${message.id}">Опции ⌄</button>
+  `;
+
+  root.append(subs, partList, footer);
+  return root;
+}
+
+function switchMarkup(id, label, checked) {
+  return `<label class="switch"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''}><span class="switch-track"></span><span>${label}</span></label>`;
+}
+function createFoldSection(title, innerHtml) {
+  const section = document.createElement('div');
+  section.className = 'message-section collapsed';
+  section.innerHTML = `
+    <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>${title}</strong></div></div>
+    <div class="section-body">${innerHtml}</div>
+  `;
+  section.querySelector('.section-head').addEventListener('click', () => section.classList.toggle('collapsed'));
+  return section;
+}
+
+function renderEmbedCard(message, embed, embedIndex) {
+  const card = document.createElement('div');
+  card.className = `embed-card ${embed.open ? '' : 'collapsed'}`.trim();
+  card.dataset.embedId = embed.id;
+  card.innerHTML = `
+    <div class="embed-head">
+      <div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Embed ${embedIndex + 1}</strong></div>
+      <div class="embed-tools">
+        <button class="icon-btn" data-action="duplicateEmbed" data-message-id="${message.id}" data-embed-id="${embed.id}">⧉</button>
+        <button class="icon-btn" data-action="deleteEmbed" data-message-id="${message.id}" data-embed-id="${embed.id}">🗑</button>
+      </div>
+    </div>
+    <div class="embed-body">
+      <div class="warning-box">Должен содержать текст или вложения</div>
+      <div class="section-card collapsed">
+        <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Автор</strong></div><div class="meta">Имя 0/256</div></div>
+        <div class="section-body input-grid-2">
+          <label>Имя<input data-embed-bind="authorName" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.authorName)}"></label>
+          <label>Icon<input data-embed-bind="authorIcon" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.authorIcon)}"></label>
+          <label style="grid-column:1/-1">URL<input data-embed-bind="authorUrl" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.authorUrl)}"></label>
+        </div>
+      </div>
+      <div class="section-card">
+        <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Тело</strong></div><div class="meta">Заголовок ${embed.title.length}/256</div></div>
+        <div class="section-body">
+          <div class="input-grid-3">
+            <label>Заголовок<input data-embed-bind="title" data-message-id="${message.id}" data-embed-id="${embed.id}" maxlength="256" value="${escapeHtml(embed.title)}"></label>
+            <label>URL<input data-embed-bind="url" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.url)}"></label>
+            <label>Цвет<input type="color" data-embed-bind="color" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.color || '#5865f2')}"></label>
+          </div>
+          <label style="margin-top:10px">Описание ${embed.description.length}/4096<textarea data-embed-bind="description" data-message-id="${message.id}" data-embed-id="${embed.id}" rows="5">${escapeHtml(embed.description)}</textarea></label>
+        </div>
+      </div>
+      <div class="section-card collapsed">
+        <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Поля</strong></div><button class="btn primary small" data-action="addField" data-message-id="${message.id}" data-embed-id="${embed.id}">Добавить Поле</button></div>
+        <div class="section-body"></div>
+      </div>
+      <div class="section-card collapsed">
+        <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Изображения</strong></div></div>
+        <div class="section-body input-grid-2">
+          <label>Ссылка на основное изображение<input data-embed-bind="image" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.image)}"></label>
+          <label>Ссылка на Миниатюру<input data-embed-bind="thumbnail" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.thumbnail)}"></label>
+        </div>
+      </div>
+      <div class="section-card collapsed">
+        <div class="section-head"><div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Футер</strong></div><div class="meta">Текст ${embed.footerText.length}/2048</div></div>
+        <div class="section-body input-grid-2">
+          <label>Текст<input data-embed-bind="footerText" data-message-id="${message.id}" data-embed-id="${embed.id}" maxlength="2048" value="${escapeHtml(embed.footerText)}"></label>
+          <label>Icon<input data-embed-bind="footerIcon" data-message-id="${message.id}" data-embed-id="${embed.id}" value="${escapeHtml(embed.footerIcon)}"></label>
+          <div style="grid-column:1/-1">${switchMarkup(`timestamp_${embed.id}`, 'Дата', embed.timestamp)}</div>
+        </div>
+      </div>
+    </div>
+  `;
+  card.querySelector('.embed-head').addEventListener('click', (event) => {
+    if (event.target.closest('.icon-btn') || event.target.closest('.btn')) return;
+    embed.open = !embed.open; renderAll();
+  });
+  card.querySelectorAll('.section-card .section-head').forEach((head) => {
+    head.addEventListener('click', (event) => {
+      if (event.target.closest('.btn')) return;
+      head.parentElement.classList.toggle('collapsed');
+    });
+  });
+  const fieldsBody = card.querySelectorAll('.section-card .section-body')[1];
+  embed.fields.forEach((field, i) => {
+    const fieldCard = document.createElement('div');
+    fieldCard.className = 'field-card';
+    fieldCard.innerHTML = `
+      <div class="field-card-top"><span class="mini-title">Поле ${i + 1}</span><button class="btn danger small" data-action="deleteField" data-message-id="${message.id}" data-embed-id="${embed.id}" data-field-id="${field.id}">Удалить</button></div>
+      <div class="field-grid">
+        <label>Имя<input data-field-bind="name" data-message-id="${message.id}" data-embed-id="${embed.id}" data-field-id="${field.id}" maxlength="256" value="${escapeHtml(field.name)}"></label>
+        <label>Значение<input data-field-bind="value" data-message-id="${message.id}" data-embed-id="${embed.id}" data-field-id="${field.id}" maxlength="1024" value="${escapeHtml(field.value)}"></label>
+        ${switchMarkup(`inline_${field.id}`, 'Inline', field.inline)}
+      </div>
+    `;
+    fieldsBody.appendChild(fieldCard);
+  });
+  return card;
+}
+
+function renderRowCard(message, row, rowIndex, isV2, parentPart = null) {
+  const card = document.createElement('div');
+  card.className = `row-card ${row.open ? '' : 'collapsed'}`.trim();
+  card.innerHTML = `
+    <div class="row-head">
+      <div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>Строка ${rowIndex + 1}</strong></div>
+      <div class="row-tools">
+        <button class="icon-btn" data-action="duplicateRow" data-message-id="${message.id}" data-row-id="${row.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''}>⧉</button>
+        <button class="icon-btn" data-action="deleteRow" data-message-id="${message.id}" data-row-id="${row.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''}>🗑</button>
+      </div>
+    </div>
+    <div class="row-body">
+      ${row.items.length ? '' : '<div class="warning-box">Должен содержать как минимум один компонент (кнопку/выбор)</div>'}
+      <div class="controls-row" style="margin-bottom:10px"><button class="btn primary" data-action="addRowComponent" data-message-id="${message.id}" data-row-id="${row.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''}>Добавить Компонент ⌄</button></div>
+    </div>
+  `;
+  card.querySelector('.row-head').addEventListener('click', (event) => {
+    if (event.target.closest('.icon-btn') || event.target.closest('.btn')) return;
+    row.open = !row.open; renderAll();
+  });
+  const body = card.querySelector('.row-body');
+  row.items.forEach((item) => body.appendChild(renderComponentItem(message, row, item, isV2, parentPart)));
+  return card;
+}
+
+function renderComponentItem(message, row, item, isV2, parentPart) {
+  const box = document.createElement('div');
+  box.className = 'field-card';
+  const isLink = item.type === 'link';
+  const placeholderLabel = ['select','userSelect','roleSelect','mentionableSelect','channelSelect'].includes(item.type) ? 'Placeholder' : 'Custom ID';
+  box.innerHTML = `
+    <div class="field-card-top"><span class="mini-title">${prettyComponentType(item.type)}</span><button class="btn danger small" data-action="deleteComponent" data-message-id="${message.id}" data-row-id="${row.id}" data-component-id="${item.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''}>Удалить</button></div>
+    <div class="field-grid">
+      <label>Label<input data-component-bind="label" data-message-id="${message.id}" data-row-id="${row.id}" data-component-id="${item.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''} value="${escapeHtml(item.label)}"></label>
+      ${isLink ? `<label>URL<input data-component-bind="url" data-message-id="${message.id}" data-row-id="${row.id}" data-component-id="${item.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''} value="${escapeHtml(item.url)}"></label>` : `<label>${placeholderLabel}<input data-component-bind="customId" data-message-id="${message.id}" data-row-id="${row.id}" data-component-id="${item.id}" data-v2="${isV2 ? '1' : '0'}" ${parentPart ? `data-part-id="${parentPart.id}"` : ''} value="${escapeHtml(item.customId || item.placeholder || '')}"></label>`}
+    </div>
+  `;
+  return box;
+}
+
+function renderV2PartCard(message, part, partIndex) {
+  const card = document.createElement('div');
+  card.className = `part-card ${part.open ? '' : 'collapsed'}`.trim();
+  const label = `${prettyPartType(part.type)} ${partIndex + 1}`;
+  card.innerHTML = `
+    <div class="part-head">
+      <div style="display:flex;align-items:center;gap:8px"><span class="chev">⌄</span><strong>${label}</strong></div>
+      <div class="part-tools">
+        <button class="icon-btn" data-action="duplicatePart" data-message-id="${message.id}" data-part-id="${part.id}">⧉</button>
+        <button class="icon-btn" data-action="deletePart" data-message-id="${message.id}" data-part-id="${part.id}">🗑</button>
+      </div>
+    </div>
+    <div class="part-body"></div>
+  `;
+  card.querySelector('.part-head').addEventListener('click', (event) => {
+    if (event.target.closest('.icon-btn') || event.target.closest('.btn')) return;
+    part.open = !part.open; renderAll();
+  });
+  const body = card.querySelector('.part-body');
+
+  if (part.type === 'content') {
+    body.innerHTML = `
+      <div class="counter-line">Содержимое <span>${part.text.length}/4000</span></div>
+      <textarea data-v2-bind="text" data-message-id="${message.id}" data-part-id="${part.id}" rows="4" placeholder="Введите текст блока">${escapeHtml(part.text)}</textarea>
+      <div class="help-line" style="margin-top:8px">Accessory</div>
+      <div class="controls-row"><button class="btn primary small" data-action="addAccessory" data-message-id="${message.id}" data-part-id="${part.id}">Add Accessory ⌄</button></div>
+    `;
+    if (part.accessory) {
+      const acc = document.createElement('div');
+      acc.className = 'field-card';
+      acc.innerHTML = `
+        <div class="field-card-top"><span class="mini-title">${prettyComponentType(part.accessory.type)}</span><button class="btn danger small" data-action="removeAccessory" data-message-id="${message.id}" data-part-id="${part.id}">Удалить</button></div>
+        <label>Label<input data-accessory-bind="label" data-message-id="${message.id}" data-part-id="${part.id}" value="${escapeHtml(part.accessory.label || '')}"></label>
+        ${part.accessory.type === 'link' ? `<label>URL<input data-accessory-bind="url" data-message-id="${message.id}" data-part-id="${part.id}" value="${escapeHtml(part.accessory.url || '')}"></label>` : ''}
+      `;
+      body.appendChild(acc);
+    }
+  }
+  if (part.type === 'container') {
+    const embedWrap = document.createElement('div');
+    part.embeds.forEach((embed, idx) => embedWrap.appendChild(renderEmbedCard(message, embed, idx)));
+    body.appendChild(embedWrap);
+    const rows = document.createElement('div');
+    (part.parts || []).forEach((sub, idx) => {
+      if (sub.type === 'row') rows.appendChild(renderRowCard(message, sub, idx, true, part));
+      if (sub.type === 'content') rows.appendChild(renderV2PartCard(message, sub, idx));
+    });
+    body.appendChild(rows);
+    const controls = document.createElement('div');
+    controls.className = 'controls-row';
+    controls.innerHTML = `<button class="btn primary small" data-action="addContainerThing" data-message-id="${message.id}" data-part-id="${part.id}">Добавить ⌄</button>`;
+    body.appendChild(controls);
+  }
+  if (part.type === 'media') {
+    body.innerHTML = `<div class="help-line">Ссылки на медиа</div>`;
+    part.urls.forEach((url, i) => {
+      const el = document.createElement('label');
+      el.className = 'fieldline';
+      el.innerHTML = `Media URL ${i + 1}<input data-media-bind="url" data-message-id="${message.id}" data-part-id="${part.id}" data-index="${i}" value="${escapeHtml(url)}">`;
+      body.appendChild(el);
+    });
+    const add = document.createElement('button'); add.className = 'btn primary small'; add.textContent = 'Добавить Media'; add.dataset.action = 'addMediaUrl'; add.dataset.messageId = message.id; add.dataset.partId = part.id; body.appendChild(add);
+  }
+  if (part.type === 'file') {
+    body.innerHTML = `
+      <label class="fieldline">Имя файла<input data-filepart-bind="filename" data-message-id="${message.id}" data-part-id="${part.id}" value="${escapeHtml(part.filename)}"></label>
+      <label class="fieldline">Ссылка на файл<input data-filepart-bind="url" data-message-id="${message.id}" data-part-id="${part.id}" value="${escapeHtml(part.url)}"></label>
+    `;
+  }
+  if (part.type === 'separator') {
+    body.innerHTML = `
+      <div class="switch-row">${switchMarkup(`divider_${part.id}`, 'Divider', part.divider)}</div>
+      <label class="fieldline">Spacing<select data-separator-bind="spacing" data-message-id="${message.id}" data-part-id="${part.id}"><option value="small">small</option><option value="large">large</option></select></label>
+    `;
+    body.querySelector('select').value = part.spacing;
+  }
+  if (part.type === 'row') {
+    return renderRowCard(message, part, partIndex, true, null);
+  }
+  return card;
+}
+
+function buildProject() {
+  return {
+    channelId: $('channelSelect').value || '',
+    editMessage: $('editMessageInput').value || '',
+    messages: state.messages,
+    activeMessageId: state.activeMessageId,
+  };
+}
+function applyProject(project = {}) {
+  $('editMessageInput').value = project.editMessage || '';
+  if (project.channelId) $('channelSelect').value = project.channelId;
+  state.messages = Array.isArray(project.messages) && project.messages.length ? project.messages : [createV1Message()];
+  state.activeMessageId = project.activeMessageId || state.messages[0].id;
+  renderAll();
+}
+function buildSendPayload(message) {
+  if (!message) return { channelId: '', content: '', embeds: [], buttons: [] };
+  const linkButtons = [];
+  const pullRows = (rows = []) => rows.forEach((row) => (row.items || []).forEach((item) => { if (item.type === 'link' && item.label && item.url) linkButtons.push({ label: item.label, url: item.url }); }));
+  if (message.type === 'v1') {
+    pullRows(message.rows);
+    return {
+      channelId: $('channelSelect').value,
+      editMessage: $('editMessageInput').value,
+      content: message.content || '',
+      pings: message.pings || { users: true, roles: true },
+      embeds: (message.embeds || []).map(packEmbed),
+      buttons: linkButtons,
+    };
+  }
+  let content = '';
+  const embeds = [];
+  (message.parts || []).forEach((part) => {
+    if (part.type === 'content') content += `${part.text || ''}\n`;
+    if (part.type === 'container') {
+      (part.embeds || []).forEach((embed) => embeds.push(packEmbed(embed)));
+      pullRows((part.parts || []).filter((x) => x.type === 'row'));
+    }
+    if (part.type === 'row') pullRows([part]);
+  });
+  return {
+    channelId: $('channelSelect').value,
+    editMessage: $('editMessageInput').value,
+    content: content.trim(),
+    pings: message.pings || { users: true, roles: true },
+    embeds,
+    buttons: linkButtons,
+  };
+}
+function packEmbed(embed) {
+  return {
+    title: embed.title || '',
+    description: embed.description || '',
+    url: embed.url || '',
+    color: embed.color || '#5865f2',
+    timestamp: Boolean(embed.timestamp),
+    author: { name: embed.authorName || '', url: embed.authorUrl || '', icon_url: embed.authorIcon || '' },
+    footer: { text: embed.footerText || '', icon_url: embed.footerIcon || '' },
+    thumbnail: { url: embed.thumbnail || '' },
+    image: { url: embed.image || '' },
+    fields: (embed.fields || []).map((field) => ({ name: field.name || '', value: field.value || '', inline: Boolean(field.inline) })),
+  };
+}
+
 function renderPreview() {
-  const msg = buildMessage();
-  const content = msg.content.replace(/@everyone/g, '@\u200beveryone').replace(/@here/g, '@\u200bhere');
-  const body = msg.useV2 ? renderV2Preview(msg) : `${content ? `<div class="content">${linkifyMentions(content)}</div>` : ''}${msg.embeds.map(renderEmbedPreview).join('')}${renderButtonRow(msg.buttonsEnabled ? msg.buttons : [])}`;
-  els.preview.innerHTML = `<div class="message"><div class="avatar"></div><div><div><span class="username">Your Bot</span><span class="bot-tag">BOT</span></div>${body}</div></div>`;
+  const wrap = $('previewMessagesWrap');
+  wrap.innerHTML = '';
+  const channelName = $('channelSelect').selectedOptions[0]?.textContent || 'No channel selected';
+  $('previewChannel').textContent = channelName;
+  const botName = state.bot?.username || state.bot?.tag || 'Discohook';
+  const avatar = state.bot?.avatarUrl || '';
+  if (!state.messages.length) {
+    wrap.innerHTML = '<div class="message-preview empty-preview">Нет данных для предпросмотра.</div>';
+    return;
+  }
+  state.messages.forEach((message) => {
+    const msg = document.createElement('div');
+    msg.className = 'discord-message';
+    msg.innerHTML = `
+      <img class="preview-avatar" src="${escapeHtml(message.profileAvatar || avatar)}" alt="avatar">
+      <div class="message-main">
+        <div class="message-headline"><span class="username">${escapeHtml(message.profileName || botName)}</span><span class="bot-tag">BOT</span><span class="timestamp">${new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</span></div>
+        <div class="message-render"></div>
+      </div>
+    `;
+    const render = msg.querySelector('.message-render');
+    if (message.threadName) {
+      const thread = document.createElement('div'); thread.className = 'preview-thread'; thread.textContent = `Ветка: ${message.threadName}`; render.appendChild(thread);
+    }
+    if (message.type === 'v1') renderPreviewV1(message, render);
+    else renderPreviewV2(message, render);
+    wrap.appendChild(msg);
+  });
 }
-function renderButtonRow(buttons) { const live = buttons.filter(b => b.enabled !== false && b.label && b.url); return live.length ? `<div class="button-preview-row">${live.map(b => `<span class="button-preview">${escapeHtml(b.emoji || '')} ${escapeHtml(b.label)}</span>`).join('')}</div>` : ''; }
-function renderEmbedPreview(embed) { const color = normalizeHex(embed.color); const author = embed.author?.name ? `<div class="embed-author">${escapeHtml(embed.author.name)}</div>` : ''; const title = embed.title ? `<div class="embed-title">${escapeHtml(embed.title)}</div>` : ''; const desc = embed.description ? `<div class="embed-desc">${linkifyMentions(embed.description)}</div>` : ''; const fields = (embed.fields || []).length ? `<div class="embed-field-grid">${embed.fields.map(f => `<div class="embed-field ${f.inline ? '' : 'full'}"><div class="embed-field-name">${escapeHtml(f.name || 'Field')}</div><div class="embed-field-value">${linkifyMentions(f.value || '-')}</div></div>`).join('')}</div>` : ''; const img = embed.image_url ? `<img class="embed-image" src="${escapeHtml(embed.image_url)}">` : ''; const thumb = embed.thumbnail_url ? `<img class="embed-thumb" src="${escapeHtml(embed.thumbnail_url)}">` : ''; const footer = embed.footer?.text ? `<div class="embed-footer">${escapeHtml(embed.footer.text)}${embed.timestamp ? ' • now' : ''}</div>` : (embed.timestamp ? '<div class="embed-footer">now</div>' : ''); if (!author && !title && !desc && !fields && !img && !thumb && !footer) return ''; return `<div class="embed-preview" style="border-left-color:${color}">${thumb}${author}${title}${desc}${fields}${img}${footer}</div>`; }
-function renderV2Preview(msg) { const inner = msg.v2.blocks.map(block => { if (block.type === 'separator') return '<hr class="v2-sep">'; if (block.type === 'media' && block.url) return `<img class="v2-media" src="${escapeHtml(block.url)}">`; if (block.type === 'section') return `<div class="v2-section"><div class="v2-text">${linkifyMentions(block.text || '')}</div>${block.button?.enabled !== false && block.button?.label ? `<span class="button-preview">${escapeHtml(block.button.emoji || '')} ${escapeHtml(block.button.label)}</span>` : ''}</div>`; return `<div class="v2-text">${linkifyMentions(block.text || '')}</div>`; }).join('') + (msg.v2.buttonsEnabled ? renderButtonRow(msg.buttons) : ''); if (msg.v2.container) return `<div class="v2-container-preview" style="border-left-color:${normalizeHex(msg.v2.accentColor)}">${inner}</div>`; return inner; }
-
-function applyMode() { const v2 = isV2Mode(); els.classicCard.style.display = v2 ? 'none' : ''; els.embedCard.style.display = v2 ? 'none' : ''; els.v2Card.style.display = v2 ? '' : 'none'; renderPreview(); }
-function extractMessageId(value) { const raw = String(value || '').trim(); const match = raw.match(/\/(\d{15,25})$/) || raw.match(/(\d{15,25})/); return match ? match[1] : raw; }
-async function loadMessage() { try { const channelId = els.channelSelect.value; if (!channelId) throw new Error('Select a channel'); const messageId = extractMessageId(els.editMessageId.value); if (!messageId) throw new Error('Message ID or URL is empty'); const data = await api(`/api/message?channelId=${encodeURIComponent(channelId)}&messageId=${encodeURIComponent(messageId)}`); applyMessage(data.message || {}); setResult(`Loaded message: ${data.url || data.messageId}`, 'ok'); } catch (e) { setResult(e.message, 'bad'); } }
-async function sendMessage() { try { const request = buildRequest(); if (!request.channelId) throw new Error('Select a channel'); const data = await api('/api/send', { method: 'POST', body: JSON.stringify(request) }); setResult(`Sent: ${data.url}`, 'ok'); } catch (e) { setResult(e.message, 'bad'); } }
-async function editMessage() { try { const request = buildRequest(); if (!request.channelId) throw new Error('Select a channel'); const messageId = els.editMessageId.value.trim(); if (!messageId) throw new Error('Message ID or URL is empty'); const data = await api('/api/edit', { method: 'POST', body: JSON.stringify({ ...request, messageId }) }); setResult(`Edited: ${data.url}`, 'ok'); } catch (e) { setResult(e.message, 'bad'); } }
-function exportJson() { els.jsonBox.value = JSON.stringify(buildMessage(), null, 2); setResult('JSON exported', 'ok'); }
-function importJson() { try { const data = JSON.parse(els.jsonBox.value); applyMessage(data.message || data); setResult('JSON imported', 'ok'); } catch (e) { setResult(`Import failed: ${e.message}`, 'bad'); } }
-function applyMessage(data) { els.content.value = data.content || ''; els.allowUserPings.checked = data.allowUserPings !== false; els.allowRolePings.checked = data.allowRolePings !== false; els.buttonsEnabled.checked = data.buttonsEnabled !== false; els.embeds.innerHTML = ''; els.buttons.innerHTML = ''; els.v2Blocks.innerHTML = ''; for (const embed of data.embeds || []) addEmbed(embed); for (const button of data.buttons || []) addButton(button); els.v2Container.checked = data.v2?.container !== false; els.v2ButtonsEnabled.checked = data.v2?.buttonsEnabled !== false; els.v2AccentColor.value = normalizeHex(data.v2?.accentColor || '#5865f2'); for (const block of data.v2?.blocks || []) addV2Block(block.type || 'text', block); document.querySelector(`[name="messageMode"][value="${data.useV2 || data.v2?.enabled ? 'v2' : 'classic'}"]`).checked = true; applyMode(); renderPreview(); }
-function saveTemplate() { const name = prompt('Template name?'); if (!name) return; const templates = JSON.parse(localStorage.getItem('lds-templates') || '{}'); templates[name] = buildMessage(); localStorage.setItem('lds-templates', JSON.stringify(templates)); setResult(`Template saved: ${name}`, 'ok'); }
-function loadTemplate() { const templates = JSON.parse(localStorage.getItem('lds-templates') || '{}'); const names = Object.keys(templates); if (!names.length) return setResult('No saved templates', 'bad'); const name = prompt(`Template name:\n${names.join('\n')}`); if (!name || !templates[name]) return; applyMessage(templates[name]); setResult(`Template loaded: ${name}`, 'ok'); }
-function clearAll() { if (!confirm('Clear editor?')) return; applyMessage({ content: '', embeds: [], buttons: [], v2: { blocks: [] } }); }
-function saveSettings() { localStorage.setItem('lds-api-url', normalizeApiUrl(els.apiUrl.value)); localStorage.setItem('lds-api-key', els.apiKey.value); els.apiUrl.value = normalizeApiUrl(els.apiUrl.value); setResult('Settings saved', 'ok'); }
-function restoreSettings() { els.apiUrl.value = localStorage.getItem('lds-api-url') || ''; els.apiKey.value = localStorage.getItem('lds-api-key') || ''; }
-
-function bind() {
-  document.addEventListener('focusin', trackTextTarget);
-  $('#saveSettings').addEventListener('click', saveSettings); $('#testConnection').addEventListener('click', testConnection); $('#loadChannels').addEventListener('click', loadChannels);
-  $('#loadRoles').addEventListener('click', loadRoles); $('#insertRoleMention').addEventListener('click', insertRoleMention); $('#loadMembers').addEventListener('click', loadMembers); $('#insertUserMention').addEventListener('click', insertUserMention);
-  $('#loadEmojis').addEventListener('click', loadEmojis); $('#insertEmoji').addEventListener('click', insertEmoji); $('#copyEmoji').addEventListener('click', copyEmoji);
-  $('#addEmbed').addEventListener('click', () => addEmbed()); $('#addButton').addEventListener('click', () => addButton()); $('#addV2Text').addEventListener('click', () => addV2Block('text')); $('#addV2Section').addEventListener('click', () => addV2Block('section')); $('#addV2Separator').addEventListener('click', () => addV2Block('separator')); $('#addV2Media').addEventListener('click', () => addV2Block('media'));
-  $('#sendMessage').addEventListener('click', sendMessage); $('#editMessage').addEventListener('click', editMessage); $('#loadMessage').addEventListener('click', loadMessage); $('#exportJson').addEventListener('click', exportJson); $('#importJson').addEventListener('click', importJson); $('#saveTemplate').addEventListener('click', saveTemplate); $('#loadTemplate').addEventListener('click', loadTemplate); $('#clearAll').addEventListener('click', clearAll); $('#refreshPreview').addEventListener('click', renderPreview);
-  $$('[name="messageMode"]').forEach(r => r.addEventListener('change', applyMode)); document.addEventListener('input', renderPreview); document.addEventListener('change', renderPreview);
+function renderPreviewV1(message, render) {
+  const content = document.createElement('div');
+  content.className = `preview-content ${message.content.trim() ? '' : 'empty'}`.trim();
+  content.textContent = message.content.trim() || ' '; render.appendChild(content);
+  (message.files || []).forEach((file) => { const el = document.createElement('div'); el.className = 'preview-file'; el.textContent = file.name || 'Файл'; render.appendChild(el); });
+  (message.embeds || []).forEach((embed) => render.appendChild(createPreviewEmbed(embed)));
+  (message.rows || []).forEach((row) => {
+    const pr = document.createElement('div'); pr.className = 'preview-row';
+    (row.items || []).forEach((item) => {
+      const el = document.createElement('div'); el.className = `preview-button ${item.type === 'link' ? 'link' : ''}`.trim(); el.textContent = item.label || prettyComponentType(item.type); pr.appendChild(el);
+    });
+    if (pr.childNodes.length) render.appendChild(pr);
+  });
+}
+function renderPreviewV2(message, render) {
+  if (!(message.parts || []).length) {
+    const empty = document.createElement('div'); empty.className = 'preview-content empty'; empty.textContent = ' '; render.appendChild(empty); return;
+  }
+  (message.parts || []).forEach((part) => {
+    if (part.type === 'content') {
+      const content = document.createElement('div'); content.className = 'preview-content'; content.textContent = part.text || ' '; render.appendChild(content);
+      if (part.accessory) {
+        const acc = document.createElement('div'); acc.className = 'preview-accessories';
+        const el = document.createElement('div'); el.className = `preview-button ${part.accessory.type === 'link' ? 'link' : ''}`.trim(); el.textContent = part.accessory.label || prettyComponentType(part.accessory.type); acc.appendChild(el); render.appendChild(acc);
+      }
+    }
+    if (part.type === 'container') {
+      (part.embeds || []).forEach((embed) => render.appendChild(createPreviewEmbed(embed)));
+      (part.parts || []).forEach((sub) => {
+        if (sub.type === 'row') {
+          const pr = document.createElement('div'); pr.className = 'preview-row';
+          (sub.items || []).forEach((item) => { const el = document.createElement('div'); el.className = `preview-button ${item.type === 'link' ? 'link' : ''}`.trim(); el.textContent = item.label || prettyComponentType(item.type); pr.appendChild(el); });
+          if (pr.childNodes.length) render.appendChild(pr);
+        }
+      });
+    }
+    if (part.type === 'media') {
+      const pr = document.createElement('div'); pr.className = 'preview-accessories';
+      (part.urls || []).filter(Boolean).forEach(() => { const el = document.createElement('div'); el.className = 'preview-file'; el.textContent = 'Media'; pr.appendChild(el); });
+      if (pr.childNodes.length) render.appendChild(pr);
+    }
+    if (part.type === 'file') {
+      const pr = document.createElement('div'); pr.className = 'preview-file'; pr.textContent = part.filename || 'Файл'; render.appendChild(pr);
+    }
+    if (part.type === 'separator') {
+      const sep = document.createElement('div'); sep.className = 'preview-separator'; render.appendChild(sep);
+    }
+    if (part.type === 'row') {
+      const pr = document.createElement('div'); pr.className = 'preview-row';
+      (part.items || []).forEach((item) => { const el = document.createElement('div'); el.className = `preview-button ${item.type === 'link' ? 'link' : ''}`.trim(); el.textContent = item.label || prettyComponentType(item.type); pr.appendChild(el); });
+      if (pr.childNodes.length) render.appendChild(pr);
+    }
+  });
+}
+function createPreviewEmbed(embed) {
+  const wrap = document.createElement('div'); wrap.className = 'preview-embed';
+  wrap.innerHTML = `<div class="embed-stripe" style="background:${escapeHtml(embed.color || '#5865f2')}"></div><div class="embed-inner"></div>`;
+  const inner = wrap.querySelector('.embed-inner');
+  if (embed.authorName) inner.insertAdjacentHTML('beforeend', `<div class="embed-author">${escapeHtml(embed.authorName)}</div>`);
+  if (embed.title) inner.insertAdjacentHTML('beforeend', `<div class="embed-title">${escapeHtml(embed.title)}</div>`);
+  if (embed.description) inner.insertAdjacentHTML('beforeend', `<div class="embed-desc">${escapeHtml(embed.description)}</div>`);
+  if (embed.fields?.length) {
+    const grid = document.createElement('div'); grid.className = 'embed-field-grid';
+    embed.fields.forEach((field) => {
+      const item = document.createElement('div'); item.className = `embed-field ${field.inline ? '' : 'full'}`.trim();
+      item.innerHTML = `<div class="embed-field-name">${escapeHtml(field.name || '\u200b')}</div><div class="embed-field-value">${escapeHtml(field.value || '\u200b')}</div>`;
+      grid.appendChild(item);
+    });
+    inner.appendChild(grid);
+  }
+  if (embed.image) inner.insertAdjacentHTML('beforeend', `<img class="embed-img" src="${escapeHtml(embed.image)}" alt="embed image">`);
+  if (embed.thumbnail && !embed.image) inner.insertAdjacentHTML('beforeend', `<img class="embed-img" src="${escapeHtml(embed.thumbnail)}" alt="embed thumb">`);
+  if (embed.footerText || embed.timestamp) inner.insertAdjacentHTML('beforeend', `<div class="embed-footer">${escapeHtml(embed.footerText || '')}${embed.timestamp ? ' • now' : ''}</div>`);
+  return wrap;
 }
 
-restoreSettings(); initUnicodeEmojis(); bind(); addEmbed(); addButton({ enabled: true }); addV2Block('text', { text: '# Components V2 panel\nWrite V2 content here.' }); applyMode(); renderPreview();
+function readBackups() { try { return JSON.parse(localStorage.getItem(BACKUP_KEY) || '[]'); } catch { return []; } }
+function writeBackups(items) { localStorage.setItem(BACKUP_KEY, JSON.stringify(items)); }
+function readHistory() { try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { return []; } }
+function writeHistory(items) { localStorage.setItem(HISTORY_KEY, JSON.stringify(items)); }
+function readTemplates() { try { return JSON.parse(localStorage.getItem(TEMPLATE_KEY) || '{}'); } catch { return {}; } }
+function writeTemplates(items) { localStorage.setItem(TEMPLATE_KEY, JSON.stringify(items)); }
+
+function openModal(title, bodyHtml, actions = []) {
+  $('modalTitle').textContent = title;
+  $('modalBody').innerHTML = bodyHtml;
+  $('modalActions').innerHTML = '';
+  actions.forEach((action) => {
+    const btn = document.createElement('button');
+    btn.className = `btn ${action.className || 'secondary'}`.trim();
+    btn.textContent = action.label;
+    btn.type = 'button';
+    btn.onclick = action.onClick;
+    $('modalActions').appendChild(btn);
+  });
+  $('modalBackdrop').classList.add('show');
+}
+function closeModal() { $('modalBackdrop').classList.remove('show'); }
+function openAddMessageModal() {
+  openModal('Добавить сообщение', `
+    <div class="choice-list">
+      <div class="choice-card" data-choice="v1"><div class="choice-title"><span>Стандартное Сообщение</span></div><div class="small-note">Может отображать текст, вложения, эмбеды.</div></div>
+      <div class="choice-card" data-choice="v2"><div class="choice-title"><span>Сообщение с компонентами</span><span class="choice-badge">НОВЫЙ</span></div><div class="small-note">Более гибкое сообщение с контейнерами и компонентами.</div></div>
+    </div>
+  `, [{ label: 'Закрыть', onClick: closeModal }]);
+  $$('[data-choice]').forEach((el) => el.addEventListener('click', () => {
+    const msg = el.dataset.choice === 'v2' ? createV2Message() : createV1Message();
+    state.messages.push(msg);
+    state.activeMessageId = msg.id;
+    closeModal(); renderAll();
+  }));
+}
+function openBackupsModal() {
+  const list = readBackups();
+  openModal('Бэкапы', list.map((item) => `<div class="backup-item"><div><strong>${escapeHtml(item.name)}</strong><br><small>${new Date(item.at).toLocaleString('ru-RU')}</small></div><div class="mini-actions"><button class="btn small secondary" data-load-backup="${item.id}">Загрузить</button><button class="btn small danger" data-delete-backup="${item.id}">Удалить</button></div></div>`).join('') || '<p class="small-note">Пока пусто.</p>', [
+    { label: 'Сохранить текущий', className: 'primary', onClick: () => {
+      const list = readBackups(); list.unshift({ id: uid('backup'), name: `Backup ${new Date().toLocaleString('ru-RU')}`, at: new Date().toISOString(), project: buildProject() }); writeBackups(list.slice(0, 30)); openBackupsModal();
+    }},
+    { label: 'Закрыть', onClick: closeModal },
+  ]);
+  $$('[data-load-backup]').forEach((btn) => btn.onclick = () => { const item = readBackups().find((x) => x.id === btn.dataset.loadBackup); if (item) { applyProject(item.project); closeModal(); } });
+  $$('[data-delete-backup]').forEach((btn) => btn.onclick = () => { writeBackups(readBackups().filter((x) => x.id !== btn.dataset.deleteBackup)); openBackupsModal(); });
+}
+function openHistoryModal() {
+  const items = readHistory();
+  openModal('История', items.map((item, i) => `<div class="backup-item"><div><strong>${escapeHtml(item.type)} #${i+1}</strong><br><small>${new Date(item.at).toLocaleString('ru-RU')} · ${escapeHtml(item.url || '')}</small></div><div class="mini-actions"><button class="btn small secondary" data-load-history="${i}">Загрузить</button></div></div>`).join('') || '<p class="small-note">История появится после отправки.</p>', [{ label: 'Закрыть', onClick: closeModal }]);
+  $$('[data-load-history]').forEach((btn) => btn.onclick = () => { const item = items[Number(btn.dataset.loadHistory)]; if (item?.project) { applyProject(item.project); closeModal(); } });
+}
+function copyText(text, ok = 'Скопировано') {
+  navigator.clipboard.writeText(text).then(() => setStatus(ok)).catch(() => setStatus('Буфер обмена недоступен.', false));
+}
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+function togglePreview(on) { $('appView').classList.toggle('preview-mode', Boolean(on)); }
+function toggleSendDropdown(event) {
+  event.stopPropagation();
+  const menu = $('sendDropdown');
+  const rect = event.currentTarget.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 8}px`;
+  menu.style.left = `${Math.max(12, rect.right - 190)}px`;
+  menu.classList.toggle('show');
+}
+function closeMenus() { $('floatingMenu').classList.remove('show'); $('sendDropdown').classList.remove('show'); }
+function openFloatingMenu(target, items) {
+  const menu = $('floatingMenu');
+  menu.innerHTML = '';
+  items.forEach((item) => {
+    const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = item.label; btn.onclick = () => { closeMenus(); item.onClick(); }; menu.appendChild(btn);
+  });
+  const rect = target.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 6}px`;
+  menu.style.left = `${Math.max(12, rect.left)}px`;
+  menu.classList.add('show');
+}
+
+function findMessage(messageId) { return state.messages.find((m) => m.id === messageId); }
+function findEmbed(message, embedId) { return (message.embeds || []).find((e) => e.id === embedId) || (message.parts || []).flatMap((p) => p.type === 'container' ? p.embeds || [] : []).find((e) => e.id === embedId); }
+function findPart(message, partId) { return (message.parts || []).find((p) => p.id === partId); }
+
+async function loadMe() {
+  const data = await api('/api/me');
+  state.bot = data.bot || null;
+  $('botTag').textContent = data.bot?.tag || 'Bot';
+}
+async function loadChannels() {
+  const data = await api('/api/channels');
+  state.guilds = data.guilds || [];
+  const select = $('channelSelect'); select.innerHTML = '';
+  state.guilds.forEach((guild) => {
+    const group = document.createElement('optgroup'); group.label = guild.name;
+    (guild.channels || []).forEach((channel) => { const option = document.createElement('option'); option.value = channel.id; option.textContent = `#${channel.name}`; group.appendChild(option); });
+    select.appendChild(group);
+  });
+  if (!select.options.length) { const option = document.createElement('option'); option.value = ''; option.textContent = 'No sendable channels'; select.appendChild(option); }
+}
+async function sendPayload() {
+  const message = currentMessage();
+  const payload = buildSendPayload(message);
+  if (!payload.channelId) return setStatus('Выбери канал.', false);
+  if (!payload.content.trim() && !payload.embeds.length && !payload.buttons.length) return setStatus('Сообщение пустое.', false);
+  $('sendBtn').disabled = true;
+  const old = $('sendBtn').textContent; $('sendBtn').textContent = 'Отправка...';
+  try {
+    const data = await api('/api/send', { method: 'POST', body: JSON.stringify(payload) });
+    const history = readHistory(); history.unshift({ type: data.edited ? 'edit' : 'send', at: new Date().toISOString(), url: data.url || '', project: buildProject() }); writeHistory(history.slice(0, 25));
+    setStatus(`${data.edited ? 'Изменено' : 'Отправлено'}: ${data.url}`);
+  } catch (error) { setStatus(error.message, false); }
+  finally { $('sendBtn').disabled = false; $('sendBtn').textContent = old; }
+}
+async function bootstrap() {
+  try {
+    await loadMe();
+    await loadChannels();
+    $('loginView').classList.add('hidden');
+    $('appView').classList.remove('hidden');
+    if (!state.messages.length) { const msg = createV1Message(); state.messages = [msg]; state.activeMessageId = msg.id; }
+    renderAll();
+  } catch {
+    $('appView').classList.add('hidden');
+    $('loginView').classList.remove('hidden');
+  }
+}
+
+function bindGeneralInputs() {
+  document.addEventListener('input', (event) => {
+    const t = event.target;
+    if (t.matches('[data-bind]')) {
+      const message = findMessage(t.dataset.messageId); if (!message) return;
+      message[t.dataset.bind] = t.value; renderPreview();
+    }
+    if (t.matches('[data-file-bind]')) {
+      const message = findMessage(t.dataset.messageId); if (!message) return;
+      const file = message.files[Number(t.dataset.index)]; if (!file) return;
+      file[t.dataset.fileBind] = t.value; renderPreview();
+    }
+    if (t.matches('[data-embed-bind]')) {
+      const message = findMessage(t.dataset.messageId); const embed = findEmbed(message, t.dataset.embedId); if (!embed) return;
+      embed[t.dataset.embedBind] = t.value; renderPreview();
+    }
+    if (t.matches('[data-field-bind]')) {
+      const message = findMessage(t.dataset.messageId); const embed = findEmbed(message, t.dataset.embedId); if (!embed) return;
+      const field = (embed.fields || []).find((x) => x.id === t.dataset.fieldId); if (!field) return;
+      field[t.dataset.fieldBind] = t.value; renderPreview();
+    }
+    if (t.matches('[data-component-bind]')) {
+      const message = findMessage(t.dataset.messageId); if (!message) return;
+      const row = resolveRow(message, t.dataset.rowId, t.dataset.partId, t.dataset.v2 === '1'); if (!row) return;
+      const cmp = row.items.find((x) => x.id === t.dataset.componentId); if (!cmp) return;
+      cmp[t.dataset.componentBind] = t.value; renderPreview();
+    }
+    if (t.matches('[data-v2-bind]')) {
+      const message = findMessage(t.dataset.messageId); const part = findPart(message, t.dataset.partId); if (!part) return;
+      part[t.dataset.v2Bind] = t.value; renderPreview();
+    }
+    if (t.matches('[data-accessory-bind]')) {
+      const message = findMessage(t.dataset.messageId); const part = findPart(message, t.dataset.partId); if (!part?.accessory) return;
+      part.accessory[t.dataset.accessoryBind] = t.value; renderPreview();
+    }
+    if (t.matches('[data-media-bind]')) {
+      const message = findMessage(t.dataset.messageId); const part = findPart(message, t.dataset.partId); if (!part) return;
+      part.urls[Number(t.dataset.index)] = t.value; renderPreview();
+    }
+    if (t.matches('[data-filepart-bind]')) {
+      const message = findMessage(t.dataset.messageId); const part = findPart(message, t.dataset.partId); if (!part) return;
+      part[t.dataset.filepartBind] = t.value; renderPreview();
+    }
+    if (t.matches('[data-separator-bind]')) {
+      const message = findMessage(t.dataset.messageId); const part = findPart(message, t.dataset.partId); if (!part) return;
+      part[t.dataset.separatorBind] = t.value; renderPreview();
+    }
+  });
+  document.addEventListener('change', (event) => {
+    const t = event.target;
+    if (t.id.startsWith('pingUsers_')) { const id = t.id.replace('pingUsers_', ''); const message = findMessage(id); if (message) { message.pings.users = t.checked; renderPreview(); } }
+    if (t.id.startsWith('pingRoles_')) { const id = t.id.replace('pingRoles_', ''); const message = findMessage(id); if (message) { message.pings.roles = t.checked; renderPreview(); } }
+    if (t.id.startsWith('timestamp_')) {
+      const embedId = t.id.replace('timestamp_', '');
+      state.messages.forEach((message) => { const embed = findEmbed(message, embedId); if (embed) embed.timestamp = t.checked; });
+      renderPreview();
+    }
+    if (t.id.startsWith('inline_')) {
+      const fieldId = t.id.replace('inline_', '');
+      state.messages.forEach((message) => {
+        (message.embeds || []).forEach((embed) => { const field = (embed.fields || []).find((x) => x.id === fieldId); if (field) field.inline = t.checked; });
+        (message.parts || []).forEach((part) => (part.embeds || []).forEach((embed) => { const field = (embed.fields || []).find((x) => x.id === fieldId); if (field) field.inline = t.checked; }));
+      });
+      renderPreview();
+    }
+    if (t.id.startsWith('divider_')) {
+      const partId = t.id.replace('divider_', '');
+      state.messages.forEach((message) => { const part = findPart(message, partId); if (part) part.divider = t.checked; });
+      renderPreview();
+    }
+  });
+}
+function resolveRow(message, rowId, partId, isV2) {
+  if (!isV2) return (message.rows || []).find((x) => x.id === rowId);
+  if (partId) {
+    const part = findPart(message, partId); return (part?.parts || []).find((x) => x.id === rowId) || (message.parts || []).find((x) => x.id === rowId);
+  }
+  return (message.parts || []).find((x) => x.id === rowId);
+}
+
+function bindClicks() {
+  $('loginForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    $('loginError').textContent = '';
+    try { await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('passwordInput').value }) }); $('passwordInput').value = ''; await bootstrap(); }
+    catch (error) { $('loginError').textContent = error.message; }
+  });
+  $('addMessageBtn').addEventListener('click', openAddMessageModal);
+  $('backupsBtn').addEventListener('click', openBackupsModal);
+  $('historyBtn').addEventListener('click', openHistoryModal);
+  $('settingsBtn').addEventListener('click', () => $('targetSection').scrollIntoView({ behavior: 'smooth' }));
+  $('shareBtn').addEventListener('click', () => copyText(JSON.stringify(buildProject()), 'Проект скопирован в буфер'));
+  $('resetBtn').addEventListener('click', () => { if (confirm('Очистить всё?')) { const msg = createV1Message(); state.messages = [msg]; state.activeMessageId = msg.id; $('editMessageInput').value = ''; renderAll(); } });
+  $('addWebhookBtn').addEventListener('click', () => $('targetSection').scrollIntoView({ behavior: 'smooth' }));
+  $('sendBtn').addEventListener('click', sendPayload);
+  $('sendMenuBtn').addEventListener('click', toggleSendDropdown);
+  $('sendDropdown').addEventListener('click', (event) => { const btn = event.target.closest('[data-send-action]'); if (!btn) return; closeMenus(); if (btn.dataset.sendAction === 'send') sendPayload(); if (btn.dataset.sendAction === 'copy') copyText(JSON.stringify(buildSendPayload(currentMessage()), null, 2), 'Payload copied'); if (btn.dataset.sendAction === 'download') downloadText(`lds-message-${Date.now()}.json`, JSON.stringify(buildSendPayload(currentMessage()), null, 2)); });
+  $('channelSelect').addEventListener('change', renderPreview);
+  $('editMessageInput').addEventListener('input', renderPreview);
+  $('refreshChannelsBtn').addEventListener('click', () => loadChannels().then(renderPreview).catch((error) => setStatus(error.message, false)));
+  $('refreshPreview').addEventListener('click', renderPreview);
+  $('previewBtn').addEventListener('click', () => togglePreview(true));
+  $('editorBtn').addEventListener('click', () => togglePreview(false));
+  $('modalClose').addEventListener('click', closeModal);
+  $('modalBackdrop').addEventListener('click', (event) => { if (event.target.id === 'modalBackdrop') closeModal(); });
+
+  document.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-action]');
+    if (!btn) {
+      if (!event.target.closest('.dropdown')) closeMenus();
+      return;
+    }
+    const action = btn.dataset.action;
+    const message = findMessage(btn.dataset.messageId);
+    if (action === 'editMessage') { state.activeMessageId = btn.closest('.message-card').dataset.messageId; renderAll(); }
+    if (action === 'duplicateMessage' && message) { const clone = cloneMessageDeep(message); state.messages.splice(state.messages.indexOf(message) + 1, 0, clone); renderAll(); }
+    if (action === 'deleteMessage' && message) { if (state.messages.length > 1) state.messages = state.messages.filter((m) => m.id !== message.id); else state.messages = [createV1Message()]; state.activeMessageId = state.messages[0].id; renderAll(); }
+    if (action === 'addMockFile' && message) { if (message.files.length >= 10) return setStatus('Максимум 10 файлов.', false); message.files.push({ name: `file_${message.files.length + 1}.png`, url: '' }); renderAll(); }
+    if (action === 'removeFile' && message) { message.files.splice(Number(btn.dataset.index), 1); renderAll(); }
+    if (action === 'pasteFile') setStatus('Вставка файлов-заглушек пока не реализована.', false);
+    if (action === 'addV1' && message) {
+      openFloatingMenu(btn, [
+        { label: '➕ Добавить Embed', onClick: () => { message.embeds.push(createEmbed()); renderAll(); } },
+        { label: '↩ Добавить Компоненты', onClick: () => { message.rows.push(createV1Row()); renderAll(); } },
+      ]);
+    }
+    if (action === 'messageOptions' && message) {
+      openFloatingMenu(btn, [
+        { label: 'Сохранить как шаблон', onClick: () => saveTemplateForMessage(message) },
+        { label: 'Загрузить шаблон', onClick: () => openTemplateModal(message) },
+      ]);
+    }
+    if (action === 'setLink') setStatus('Set Link пока оставлен как заглушка.', false);
+    if (action === 'duplicateEmbed' && message) {
+      const embed = findEmbed(message, btn.dataset.embedId); if (!embed) return; const list = message.embeds.includes(embed) ? message.embeds : (message.parts.find((p) => (p.embeds || []).includes(embed))?.embeds || []); const idx = list.indexOf(embed); list.splice(idx + 1, 0, structuredClone(embed)); renderAll();
+    }
+    if (action === 'deleteEmbed' && message) {
+      message.embeds = (message.embeds || []).filter((e) => e.id !== btn.dataset.embedId);
+      message.parts?.forEach((part) => { if (part.embeds) part.embeds = part.embeds.filter((e) => e.id !== btn.dataset.embedId); });
+      renderAll();
+    }
+    if (action === 'addField' && message) { const embed = findEmbed(message, btn.dataset.embedId); if (!embed) return; embed.fields.push(createField()); renderAll(); }
+    if (action === 'deleteField' && message) { const embed = findEmbed(message, btn.dataset.embedId); if (!embed) return; embed.fields = embed.fields.filter((f) => f.id !== btn.dataset.fieldId); renderAll(); }
+    if (action === 'duplicateRow' && message) {
+      const row = resolveRow(message, btn.dataset.rowId, btn.dataset.partId, btn.dataset.v2 === '1'); if (!row) return;
+      const clone = cloneRowDeep(row);
+      if (btn.dataset.v2 === '1') {
+        if (btn.dataset.partId) { const part = findPart(message, btn.dataset.partId); part.parts.splice(part.parts.indexOf(row) + 1, 0, clone); }
+        else message.parts.splice(message.parts.indexOf(row) + 1, 0, clone);
+      } else message.rows.splice(message.rows.indexOf(row) + 1, 0, clone);
+      renderAll();
+    }
+    if (action === 'deleteRow' && message) {
+      if (btn.dataset.v2 === '1') {
+        if (btn.dataset.partId) { const part = findPart(message, btn.dataset.partId); part.parts = part.parts.filter((r) => r.id !== btn.dataset.rowId); }
+        else message.parts = message.parts.filter((r) => r.id !== btn.dataset.rowId);
+      } else message.rows = message.rows.filter((r) => r.id !== btn.dataset.rowId);
+      renderAll();
+    }
+    if (action === 'addRowComponent' && message) {
+      const row = resolveRow(message, btn.dataset.rowId, btn.dataset.partId, btn.dataset.v2 === '1'); if (!row) return;
+      openFloatingMenu(btn, [
+        ['button','Кнопка'], ['link','Кнопка с Ссылкой'], ['select','Меню Выбора'], ['userSelect','Меню Выбора Пользователей'], ['roleSelect','Меню Выбора Ролей'], ['mentionableSelect','Меню Выбора Пользователей и Ролей'], ['channelSelect','Меню Выбора Каналов']
+          .map(([type, label]) => ({ type, label }))
+      ].flat().map((item) => ({ label: item.label, onClick: () => { row.items.push(createComponent(item.type)); renderAll(); } })));
+    }
+    if (action === 'deleteComponent' && message) {
+      const row = resolveRow(message, btn.dataset.rowId, btn.dataset.partId, btn.dataset.v2 === '1'); if (!row) return; row.items = row.items.filter((x) => x.id !== btn.dataset.componentId); renderAll();
+    }
+    if (action === 'addV2' && message) {
+      openFloatingMenu(btn, [
+        { label: 'T Содержимое', onClick: () => { message.parts.push(createContentPart()); renderAll(); } },
+        { label: '⊞ Container', onClick: () => { message.parts.push(createContainerPart()); renderAll(); } },
+        { label: '🖼 Media Gallery', onClick: () => { message.parts.push(createMediaGalleryPart()); renderAll(); } },
+        { label: '🗎 Файл', onClick: () => { message.parts.push(createFilePart()); renderAll(); } },
+        { label: '➖ Разделитель', onClick: () => { message.parts.push(createSeparatorPart()); renderAll(); } },
+        { label: '☰ Строка', onClick: () => { message.parts.push(createRowPart()); renderAll(); } },
+      ]);
+    }
+    if (action === 'duplicatePart' && message) { const part = findPart(message, btn.dataset.partId); if (!part) return; const clone = clonePartDeep(part); message.parts.splice(message.parts.indexOf(part) + 1, 0, clone); renderAll(); }
+    if (action === 'deletePart' && message) { message.parts = message.parts.filter((p) => p.id !== btn.dataset.partId); renderAll(); }
+    if (action === 'addAccessory' && message) {
+      const part = findPart(message, btn.dataset.partId); if (!part) return;
+      openFloatingMenu(btn, [
+        { label: 'Кнопка', onClick: () => { part.accessory = createComponent('button'); renderAll(); } },
+        { label: 'Кнопка с Ссылкой', onClick: () => { part.accessory = createComponent('link'); renderAll(); } },
+        { label: 'Миниатюра', onClick: () => { part.accessory = { type: 'thumbnail', label: 'Миниатюра', url: '' }; renderAll(); } },
+      ]);
+    }
+    if (action === 'removeAccessory' && message) { const part = findPart(message, btn.dataset.partId); if (part) { part.accessory = null; renderAll(); } }
+    if (action === 'addContainerThing' && message) {
+      const part = findPart(message, btn.dataset.partId); if (!part) return;
+      openFloatingMenu(btn, [
+        { label: 'Добавить Embed', onClick: () => { part.embeds.push(createEmbed()); renderAll(); } },
+        { label: 'Добавить Строку', onClick: () => { part.parts.push(createRowPart()); renderAll(); } },
+        { label: 'Добавить Содержимое', onClick: () => { part.parts.push(createContentPart()); renderAll(); } },
+      ]);
+    }
+    if (action === 'addMediaUrl' && message) { const part = findPart(message, btn.dataset.partId); if (part) { part.urls.push(''); renderAll(); } }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { closeModal(); closeMenus(); }
+  });
+}
+
+function saveTemplateForMessage(message) {
+  openModal('Сохранить шаблон', '<label>Имя шаблона<input id="templateNameInput" placeholder="Название"></label>', [
+    { label: 'Сохранить', className: 'primary', onClick: () => {
+      const name = $('templateNameInput').value.trim(); if (!name) return setStatus('Введите имя шаблона.', false);
+      const all = readTemplates(); all[name] = structuredClone(message); writeTemplates(all); closeModal(); setStatus('Шаблон сохранён.');
+    }},
+    { label: 'Отмена', onClick: closeModal },
+  ]);
+}
+function openTemplateModal(message) {
+  const all = readTemplates();
+  openModal('Шаблоны', Object.keys(all).map((name) => `<div class="backup-item"><strong>${escapeHtml(name)}</strong><div class="mini-actions"><button class="btn small secondary" data-load-template="${escapeHtml(name)}">Загрузить</button><button class="btn small danger" data-delete-template="${escapeHtml(name)}">Удалить</button></div></div>`).join('') || '<p class="small-note">Шаблонов нет.</p>', [{ label: 'Закрыть', onClick: closeModal }]);
+  $$('[data-load-template]').forEach((btn) => btn.onclick = () => {
+    const tpl = structuredClone(all[btn.dataset.loadTemplate]);
+    if (!tpl) return; tpl.id = message.id; const idx = state.messages.findIndex((x) => x.id === message.id); state.messages[idx] = tpl; state.activeMessageId = tpl.id; closeModal(); renderAll();
+  });
+  $$('[data-delete-template]').forEach((btn) => btn.onclick = () => { const data = readTemplates(); delete data[btn.dataset.deleteTemplate]; writeTemplates(data); openTemplateModal(message); });
+}
+
+bindGeneralInputs();
+bindClicks();
+bootstrap();
