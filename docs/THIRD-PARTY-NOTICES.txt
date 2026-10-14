@@ -6,3 +6,4 @@ License: GNU Affero General Public License v3 or later (see LICENSE.txt).
 Modified 2026-10-14: LDS branding, bot API delivery, GitHub Pages static export, local sharing, Components V2 companion editor, Node compatibility.
 Source of modified version: https://github.com/Lolekx228/Lolekx-s-Development-Studio-Bot
 Provided without warranty. Not affiliated with Discohook or Discord.
+Modified 2026-10-15: Discord OAuth login with owner allowlist, browser-bound handoff and draft preservation.

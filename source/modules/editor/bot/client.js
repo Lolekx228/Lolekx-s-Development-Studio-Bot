@@ -1,5 +1,6 @@
 'use strict';
 const embeds = require('./embed-core.js');
+const discordLogin = require('./oauth-browser.js');
 function originOf(value) {
   const url = new URL(value);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || !['','/'].includes(url.pathname)) throw Error('Введите HTTPS-адрес API без пути и параметров.');
@@ -49,6 +50,18 @@ class BotClient {
     if (!data.token || typeof data.token !== 'string') throw Error('API не вернул сессию.');
     this.token = data.token;
     return this.request('/api/discord/connection');
+  }
+  async startDiscord(value, returnUrl, store = sessionStorage) {
+    this.origin=originOf(value);
+    return discordLogin.begin((path,body)=>this.request(path,{method:'POST',body:JSON.stringify(body)},true),this.origin,returnUrl,store);
+  }
+  async finishDiscord(store = sessionStorage) {
+    const result=discordLogin.takeResult(store);if(!result)return null;
+    this.origin=originOf(result.api);
+    const session=await this.request('/api/oauth/exchange',{method:'POST',body:JSON.stringify(result.body)},true);
+    if(!session.token||typeof session.token!=='string')throw Error('API не вернул сессию.');
+    this.token=session.token;
+    return {...await this.request('/api/discord/connection'),user:session.user};
   }
   channels(guild) { return this.request('/api/discord/channels?guild_id=' + encodeURIComponent(guild)); }
   async send(messages, channel, pings, onProgress = (done, total) => {}) {

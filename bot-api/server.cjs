@@ -19,14 +19,23 @@ async function readBody(req) {
 async function createHandler(options = {}) {
   const settings = options.env || process.env;
   const password = settings.EDITOR_ACCESS_PASSWORD || '';
-  if (password.length < 20) throw Error('Задайте EDITOR_ACCESS_PASSWORD длиной не менее 20 символов на хостинге бота.');
+  const authMode = settings.EDITOR_AUTH_MODE || (settings.DISCORD_CLIENT_SECRET ? 'discord' : 'password');
+  if (!['discord', 'password'].includes(authMode)) throw Error('EDITOR_AUTH_MODE: используйте discord или password.');
+  if (authMode === 'password' && password.length < 20) throw Error('Задайте EDITOR_ACCESS_PASSWORD длиной не менее 20 символов на хостинге бота.');
   if (!settings.DISCORD_TOKEN) throw Error('DISCORD_TOKEN отсутствует в окружении бота.');
   let origin;
   try { const url = new URL(settings.EDITOR_ALLOWED_ORIGIN); if (url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) throw Error(); origin = url.origin; } catch { throw Error('Задайте EDITOR_ALLOWED_ORIGIN: HTTPS-адрес сайта, например https://username.github.io (без пути репозитория).'); }
   const service = options.handleDiscord || (await import(pathToFileURL(path.join(__dirname, 'discord-service.mjs')).href)).handleDiscord;
   const env = { DISCORD_TOKEN: settings.DISCORD_TOKEN, DISCORD_GUILD_ID: settings.GUILD_ID || settings.DISCORD_GUILD_ID, SITE_ORIGIN: origin };
+  const oauth = authMode === 'discord' ? require('./oauth.cjs').createOAuth(settings, origin, options.fetchOAuth || fetch) : null;
   const sessions = new Map(); const expectedPassword = hash(password); let failedAttempts = 0, resetAt = Date.now() + 60000;
-  const cleanup = setInterval(() => { const now = Date.now(); for (const [key, value] of sessions) if (value < now) sessions.delete(key); }, 60000); cleanup.unref();
+  function mintSession(user = null) {
+    const now=Date.now(); for(const [key,value] of sessions) if(value.expiresAt<=now)sessions.delete(key);
+    if(sessions.size>=100)throw Object.assign(Error('Слишком много активных сессий.'),{status:429});
+    const token=randomBytes(32).toString('base64url'),expiresAt=now+SESSION_MS;
+    sessions.set(token,{expiresAt,user});return {token,expires_at:expiresAt,user};
+  }
+  const cleanup = setInterval(() => { const now = Date.now(); for (const [key, value] of sessions) if (value.expiresAt <= now) sessions.delete(key); oauth?.cleanup(); }, 60000); cleanup.unref();
   const handler = async (req, res) => {
     let requestOrigin = req.headers.origin, corsOrigin = requestOrigin === origin ? origin : undefined;
     try {
@@ -34,29 +43,41 @@ async function createHandler(options = {}) {
       if (req.method === 'OPTIONS') return reply(res, 204, undefined, corsOrigin);
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname === '/healthz' && req.method === 'GET') return reply(res, 200, { ok: true }, corsOrigin);
+      if (url.pathname === '/api/oauth/callback' && req.method === 'GET') {
+        if (!oauth) return reply(res, 503, {error:'Вход Discord не настроен. Обновите API и настройте OAuth на Wispbyte.'}, corsOrigin);
+        const target=await oauth.callback(url);
+        res.writeHead(303, {Location:target,'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'});res.end();return;
+      }
+      if (['/api/oauth/start','/api/oauth/exchange'].includes(url.pathname) && req.method === 'POST') {
+        if(requestOrigin!==origin||!req.headers['content-type']?.startsWith('application/json'))return reply(res,403,{error:'Неверный источник запроса.'},corsOrigin);
+        if(!oauth)return reply(res,503,{error:'Вход Discord не настроен. Обновите API и настройте OAuth на Wispbyte.'},corsOrigin);
+        let input;try{input=JSON.parse(await readBody(req))}catch(e){return reply(res,e.status||400,{error:'Неверный запрос входа.'},corsOrigin)}
+        const result=url.pathname.endsWith('/start')?oauth.start(input?.proof):mintSession(oauth.exchange(input));
+        return reply(res,200,result,corsOrigin);
+      }
       if (url.pathname === '/api/session' && req.method === 'POST') {
+        if(authMode!=='password')return reply(res,403,{error:'Используйте вход через Discord.'},corsOrigin);
         if (requestOrigin !== origin || !req.headers['content-type']?.startsWith('application/json')) return reply(res, 403, { error: 'Неверный источник запроса.' }, corsOrigin);
         if (Date.now() > resetAt) { resetAt = Date.now() + 60000; failedAttempts = 0; }
         if (failedAttempts >= 5) return reply(res, 429, { error: 'Слишком много попыток входа. Повторите через минуту.' }, corsOrigin);
         let input; try { input = JSON.parse(await readBody(req)); } catch (e) { return reply(res, e.status || 400, { error: 'Неверный запрос входа.' }, corsOrigin); }
         if (typeof input.password !== 'string' || !timingSafeEqual(hash(input.password), expectedPassword)) { failedAttempts++; return reply(res, 401, { error: 'Неверный пароль редактора.' }, corsOrigin); }
-        const now = Date.now(); for (const [key, value] of sessions) if (value < now) sessions.delete(key);
-        if (sessions.size >= 100) return reply(res, 429, { error: 'Слишком много активных сессий.' }, corsOrigin);
-        const token = randomBytes(32).toString('base64url'), expiresAt = now + SESSION_MS; sessions.set(token, expiresAt); return reply(res, 200, { token, expires_at: expiresAt }, corsOrigin);
+        return reply(res, 200, mintSession(), corsOrigin);
       }
       const bearer = typeof req.headers.authorization === 'string' ? req.headers.authorization.replace(/^Bearer /, '') : '';
-      if (!bearer || (sessions.get(bearer) || 0) <= Date.now()) { sessions.delete(bearer); return reply(res, 401, { error: 'Войдите по паролю редактора.' }, corsOrigin); }
+      if (!bearer || (sessions.get(bearer)?.expiresAt || 0) <= Date.now()) { sessions.delete(bearer); return reply(res, 401, { error: 'Войдите в редактор.' }, corsOrigin); }
+      if (url.pathname === '/api/session' && req.method === 'GET') return reply(res,200,{user:sessions.get(bearer).user},corsOrigin);
       if (url.pathname === '/api/session' && req.method === 'DELETE') { sessions.delete(bearer); return reply(res, 200, { ok: true }, corsOrigin); }
       if (!url.pathname.startsWith('/api/discord/')) return reply(res, 404, { error: 'Маршрут не найден.' }, corsOrigin);
       if (!['GET', 'POST'].includes(req.method)) return reply(res, 405, { error: 'Метод не поддерживается.' }, corsOrigin);
       const body = req.method === 'POST' ? await readBody(req) : undefined;
       const headers = new Headers(); if (requestOrigin) headers.set('origin', requestOrigin); if (req.headers['content-type']) headers.set('content-type', req.headers['content-type']);
       const request = new Request('https://backend.invalid' + url.pathname + url.search, { method: req.method, headers, body });
-      const result = await service(request, env, { authenticated: true });
+      const result = await service(request, env, { authenticated: true, discordUser: sessions.get(bearer).user });
       const payload = await result.json(); reply(res, result.status, payload, corsOrigin);
-    } catch (e) { reply(res, e.status || 500, { error: e.status === 413 ? e.message : 'Не удалось обработать запрос.' }, corsOrigin); }
+    } catch (e) { reply(res, e.status || 500, { error: e.status ? e.message : 'Не удалось обработать запрос.' }, corsOrigin); }
   };
-  handler.dispose = () => { clearInterval(cleanup); sessions.clear(); };
+  handler.dispose = () => { clearInterval(cleanup); sessions.clear(); oauth?.dispose(); };
   return handler;
 }
 async function createServer(options = {}) {

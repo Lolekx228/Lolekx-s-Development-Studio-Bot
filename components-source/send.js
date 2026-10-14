@@ -6,7 +6,7 @@ function sendDestination() { const manual = $('#channelId').value.trim(); return
 function syncSendButton() { sendButton.disabled = sending || !connected || dirty || validate(state).errors.length > 0 || !/^\d{17,20}$/.test(sendDestination()); }
 function sendResult(message, isError = false) { const result = $('#sendResult'); result.textContent = message; result.classList.toggle('send-error', isError); }
 async function api(path, options = {}) {
-  if (!sessionToken || !apiOrigin) throw Error('Сначала подключитесь к API бота по паролю редактора.');
+  if (!sessionToken || !apiOrigin) throw Error('Сначала войдите через Discord.');
   let response;
   try { response = await fetch(apiOrigin + '/api/discord' + path, { ...options, headers: { ...options.headers, Authorization: 'Bearer ' + sessionToken }, cache: 'no-store', credentials: 'omit', signal: AbortSignal.timeout(25000) }); }
   catch { const e = Error('API бота не отвечает. Проверьте HTTPS-адрес, доступность Wispbyte и EDITOR_ALLOWED_ORIGIN.'); e.uncertain = options.method === 'POST'; throw e; }
@@ -50,9 +50,9 @@ sendButton.onclick = async () => {
 
 function logoutLocal() {
   sessionToken = ''; connected = false; apiOrigin = '';
-  $('#backendUrl').disabled = false; $('#backendPassword').value = ''; $('#backendPassword').disabled = false;
+  $('#backendUrl').disabled = false; 
   $('#connectBackend').hidden = false; $('#disconnectBackend').hidden = true;
-  $('#guildSelect').disabled = true; $('#channelSelect').disabled = true; $('#connectionStatus').textContent = 'Войдите для отправки сообщений'; syncSendButton();
+  $('#guildSelect').disabled = true; $('#channelSelect').disabled = true; $('#connectionStatus').textContent = 'Войдите через Discord для отправки'; syncSendButton();
 }
 function backendOrigin(value) {
   const url = new URL(value); const local = ['localhost', '127.0.0.1'].includes(location.hostname) && ['localhost', '127.0.0.1'].includes(url.hostname);
@@ -61,23 +61,35 @@ function backendOrigin(value) {
 }
 $('#backendUrl').value = window.LDS_CONFIG?.apiUrl || '';
 $('#connectBackend').onclick = async () => {
-  const button = $('#connectBackend'); button.disabled = true;
+  const button=$('#connectBackend');button.disabled=true;
   try {
-    const origin = backendOrigin($('#backendUrl').value.trim());
-    if (!$('#backendPassword').value) throw Error('Введите отдельный пароль редактора, заданный на Wispbyte.');
-    const response = await fetch(origin + '/api/session', { method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: $('#backendPassword').value }), signal: AbortSignal.timeout(15000) });
-    if (!response.headers.get('content-type')?.includes('application/json')) throw Error('По этому адресу нет API редактора.');
-    const data = await response.json(); if (!response.ok) throw Error(data.error || 'Не удалось войти.');
-    if (typeof data.token !== 'string' || !data.token) throw Error('API не вернул сессию.');
-    apiOrigin = origin; sessionToken = data.token; $('#backendPassword').value = ''; $('#backendPassword').disabled = true; $('#backendUrl').disabled = true;
-    button.hidden = true; $('#disconnectBackend').hidden = false; await loadConnection();
-  } catch (e) { sendResult(e instanceof TypeError ? 'Не удалось подключиться. Проверьте адрес API, HTTPS и доступность Wispbyte.' : e.message, true); }
-  finally { button.disabled = false; }
+    if(dirty)throw Error('Сначала примените изменения JSON.');
+    const origin=backendOrigin($('#backendUrl').value.trim());
+    const target=await LDSDiscordLogin.begin(async(path,body)=>{
+      const response=await fetch(origin+path,{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
+      if(!response.headers.get('content-type')?.includes('application/json'))throw Error('По этому адресу нет API редактора.');
+      const data=await response.json();if(!response.ok)throw Error(data.error||'Не удалось начать вход.');return data;
+    },origin,location.origin+location.pathname,sessionStorage);
+    location.assign(target);
+  }catch(error){sendResult(error.message,true)}finally{button.disabled=false}
 };
+
 $('#disconnectBackend').onclick = () => {
   if (sessionToken && apiOrigin) fetch(apiOrigin + '/api/session', { method: 'DELETE', credentials: 'omit', headers: { Authorization: 'Bearer ' + sessionToken } }).catch(() => {});
   logoutLocal(); sendResult('Вы вышли. Редактор и экспорт JSON продолжают работать.');
 };
 $('#reloadChannels').onclick = () => { if (!sessionToken) { sendResult('Сначала подключитесь к API бота.', true); return; } return connected && $('#guildSelect').value ? loadChannels() : loadConnection(); };
-sendResult('Редактор работает без подключения. Для отправки войдите в API на хостинге бота.');
+sendResult('Редактор работает без подключения. Для отправки войдите через Discord.');
 syncSendButton();
+
+(async()=>{
+  try{
+    const result=LDSDiscordLogin.takeResult(sessionStorage);if(!result)return;
+    const origin=backendOrigin(result.api);
+    const response=await fetch(origin+'/api/oauth/exchange',{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},body:JSON.stringify(result.body),signal:AbortSignal.timeout(15000)});
+    if(!response.headers.get('content-type')?.includes('application/json'))throw Error('По этому адресу нет API редактора.');
+    const data=await response.json();if(!response.ok||!data.token)throw Error(data.error||'Вход не подтверждён.');
+    apiOrigin=origin;sessionToken=data.token;$('#backendUrl').value=origin;$('#backendUrl').disabled=true;$('#connectBackend').hidden=true;$('#disconnectBackend').hidden=false;
+    await loadConnection();
+  }catch(error){sendResult(error.message,true)}
+})();

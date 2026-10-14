@@ -14,6 +14,16 @@ function install(options={}) {
   transcript=transcript.replace(signature,signature+routes);changed.push(transcriptPath);
  }
  if(!index.includes(START_MARKER)){index+=`\n${START_MARKER}\nif (process.env.EDITOR_ACCESS_PASSWORD) {\n    require('./utils/ticketTranscriptServer').startTicketTranscriptServer();\n}\n`;changed.push(indexPath);}
+ // Upgrade already-installed V1 integrations, preserving the transcript server.
+ const oldRoute="editorPath.startsWith('/api/discord/'))";
+ if(transcript.includes(oldRoute)){
+  transcript=transcript.replace(oldRoute,"editorPath.startsWith('/api/discord/') || editorPath.startsWith('/api/oauth/'))");
+  if(!changed.includes(transcriptPath))changed.push(transcriptPath);
+ }
+ if(index.includes('if (process.env.EDITOR_ACCESS_PASSWORD) {')){
+  index=index.replace('if (process.env.EDITOR_ACCESS_PASSWORD) {','if (process.env.EDITOR_ACCESS_PASSWORD || process.env.EDITOR_AUTH_MODE === \'discord\' || process.env.DISCORD_CLIENT_SECRET) {');
+  if(!changed.includes(indexPath))changed.push(indexPath);
+ }
  for(const file of changed){const backup=file+'.lds-editor.bak';if(!fs.existsSync(backup))fs.copyFileSync(file,backup);fs.writeFileSync(file,file===transcriptPath?transcript:index);}
  return {changed:changed.map(file=>path.relative(root,file))};
 }
