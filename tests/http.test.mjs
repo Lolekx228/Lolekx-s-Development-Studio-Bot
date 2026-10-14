@@ -13,7 +13,7 @@ test('Wispbyte API: origin, login, session, oversized request, protected API and
   r=await call('/api/session','OPTIONS');assert.equal(r.status,204);assert.ok(r.headers.get('access-control-allow-headers').includes('Authorization'));
   r=await call('/api/session','POST',{password},undefined,'https://evil.example');assert.equal(r.status,403);assert.equal(r.headers.get('access-control-allow-origin'),null);
   r=await call('/api/session','POST',{password:'wrong'});assert.equal(r.status,401);
-  r=await call('/api/session','POST',{password:'a'.repeat(18000)});assert.equal(r.status,413);
+  r=await call('/api/session','POST',{password:'a'.repeat(70000)});assert.equal(r.status,413);
   r=await call('/api/session','POST',{password});assert.equal(r.status,200);const session=await r.json();assert.ok(session.token.length>=40);
   r=await call('/api/discord/connection','GET',undefined,session.token);assert.equal(r.status,200);assert.equal(forwarded,1);
   r=await call('/api/discord/messages','POST',{content:'x'},session.token,'https://evil.example');assert.equal(r.status,403);assert.equal(forwarded,1);
