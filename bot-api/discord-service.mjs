@@ -1,3 +1,4 @@
+import embedCore from './embed-core.cjs';
 const API = 'https://discord.com/api/v10';
 const CHANNEL_TYPES = new Set([0, 2, 5, 10, 11, 12]);
 const SNOWFLAKE = /^\d{17,20}$/;
@@ -56,8 +57,8 @@ function webUrl(value) { if (typeof value !== 'string') return false; try { retu
 function cleanText(value, max, label) { if (typeof value !== 'string' || !value.trim() || value.length > max) throw new ApiError(400, label + ': пустое значение или превышен лимит ' + max + '.'); return value.replace(/@everyone/g, '@\u200beveryone').replace(/@here/g, '@\u200bhere'); }
 export function preparePayload(input, pings = false) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ApiError(400, 'Нужен JSON-объект сообщения.');
-  if (JSON.stringify(input).length > 4000) throw new ApiError(400, 'JSON превышает лимит редактора: 4000 символов.');
-  if (input.embeds || input.attachments?.length) throw new ApiError(400, 'Используйте компоненты: embeds и вложения не поддерживаются этим редактором.');
+  const maxJson=input.embeds?.length?14000:4000;if (JSON.stringify(input).length > maxJson) throw new ApiError(400, 'JSON превышает лимит редактора: '+maxJson+' символов.');
+  if (input.attachments?.length) throw new ApiError(400, 'Вложения пока не поддерживаются.');
   let count = 0, totalText = 0, v2 = false; const customIds = new Set();
   function customId(c) { if (typeof c.custom_id !== 'string' || !c.custom_id || c.custom_id.length > 100 || customIds.has(c.custom_id)) throw new ApiError(400, 'Custom ID должен быть уникальной строкой до 100 символов.'); customIds.add(c.custom_id); return c.custom_id; }
   function emoji(e) { if (!e || typeof e !== 'object') return undefined; const out = {}; if (e.id && SNOWFLAKE.test(String(e.id))) out.id = String(e.id); if (typeof e.name === 'string') out.name = e.name.slice(0, 100); if (e.animated) out.animated = true; return Object.keys(out).length ? out : undefined; }
@@ -103,7 +104,10 @@ export function preparePayload(input, pings = false) {
   const out = { allowed_mentions: { parse: pings === true ? ['users', 'roles'] : [], replied_user: false } };
   if (input.components !== undefined) { if (!Array.isArray(input.components)) throw new ApiError(400, 'components должен быть массивом.'); out.components = input.components.map(c => component(c)); }
   if (input.content !== undefined && input.content !== '') out.content = cleanText(input.content, 2000, 'Сообщение');
-  if (!out.content && !out.components?.length) throw new ApiError(400, 'Сообщение пустое.');
+  if(input.embeds!==undefined){try{const embeds=embedCore.prepare(input.embeds);if(embeds.length)out.embeds=embeds;}catch(error){throw new ApiError(400,error.message)}}
+  if(out.embeds?.length&&(v2||(Number(input.flags)&32768)))throw new ApiError(400,'Embeds нельзя смешивать с Components V2.');
+  if(!v2&&out.components?.length>5)throw new ApiError(400,'Максимум 5 рядов компонентов в обычном сообщении.');
+  if (!out.content && !out.components?.length && !out.embeds?.length) throw new ApiError(400, 'Сообщение пустое.');
   if (v2 && out.content) throw new ApiError(400, 'Перенесите content в текстовый блок Components V2.');
   if (totalText > 4000) throw new ApiError(400, 'Текст компонентов превышает 4000 символов.');
   const flags = (v2 ? 32768 : 0) | (Number(input.flags) & 4); if (flags) out.flags = flags;
@@ -129,8 +133,8 @@ export async function handleDiscord(request, env, user) {
     if (request.method === 'GET' && path === '/channels') return json({ channels: await channels(env, url.searchParams.get('guild_id')) });
     if (request.method === 'POST' && path === '/messages') {
       if (request.headers.get('origin') !== (env.SITE_ORIGIN || SITE_ORIGIN) || !request.headers.get('content-type')?.startsWith('application/json')) throw new ApiError(403, 'Неверный источник запроса. Обновите страницу сайта.');
-      if (Number(request.headers.get('content-length') || 0) > 16000) throw new ApiError(413, 'Запрос слишком большой.');
-      const text = await request.text(); if (text.length > 16000) throw new ApiError(413, 'Запрос слишком большой.');
+      if (Number(request.headers.get('content-length') || 0) > 64000) throw new ApiError(413, 'Запрос слишком большой.');
+      const text = await request.text(); if (text.length > 64000) throw new ApiError(413, 'Запрос слишком большой.');
       let body; try { body = JSON.parse(text); } catch { throw new ApiError(400, 'Невалидный JSON.'); }
       return json(await send(env, body));
     }

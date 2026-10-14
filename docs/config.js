@@ -1,4 +1,2 @@
-// Публичные настройки. Здесь не должно быть токенов бота или паролей.
-window.LDS_CONFIG = {
-  apiUrl: '' // Когда Wispbyte заработает: https://ВАШ-ПОДДОМЕН
-};
+// Публичный адрес API. Пароли и токены здесь не хранятся.
+window.LDS_CONFIG = { apiUrl: 'https://lolekx-api.wispbyte.app' };

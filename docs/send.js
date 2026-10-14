@@ -38,7 +38,7 @@ $('#guildSelect').onchange = loadChannels; $('#channelSelect').onchange = () => 
 new MutationObserver(syncSendButton).observe($('#copy'), { attributes: true, attributeFilter: ['disabled'] });
 sendButton.onclick = async () => {
   syncSendButton(); if (sendButton.disabled) return;
-  const body = { channel_id: sendDestination(), payload: JSON.parse(JSON.stringify(state)), pings: $('#allowPings').checked };
+  const body = { channel_id: sendDestination(), payload: payloadForExport(), pings: $('#allowPings').checked };
   const key = JSON.stringify(body);
   if (!pendingSend || pendingSend.key !== key) { pendingSend = { key, id: crypto.randomUUID().replace(/-/g, '').slice(0, 24) }; }
   body.request_id = pendingSend.id; sending = true; sendButton.textContent = 'Отправляем…'; syncSendButton(); sendResult('Ждём подтверждение Discord…');
