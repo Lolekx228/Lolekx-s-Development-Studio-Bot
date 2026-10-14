@@ -12,7 +12,7 @@ function reply(res, status, value, origin) {
 }
 async function readBody(req) {
   const chunks = []; let size = 0, tooLarge = false;
-  for await (const chunk of req) { size += chunk.length; if (size > 64000) { tooLarge = true; continue; } chunks.push(chunk); }
+  for await (const chunk of req) { size += chunk.length; if (size > 16000) { tooLarge = true; continue; } chunks.push(chunk); }
   if (tooLarge) { const e = Error('Запрос слишком большой.'); e.status = 413; throw e; }
   return Buffer.concat(chunks).toString('utf8');
 }
