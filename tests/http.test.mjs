@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const require=createRequire(import.meta.url),{createServer}=require('../bot-api/server.cjs');
-const origin='https://herodrineyt.github.io',password='test-fixture-password-123456789';
+const origin='https://lolekx228.github.io',password='test-fixture-password-123456789';
 test('Wispbyte API: origin, login, session, oversized request, protected API and logout',async()=>{
  let forwarded=0;const server=await createServer({env:{EDITOR_ACCESS_PASSWORD:password,EDITOR_ALLOWED_ORIGIN:origin,DISCORD_TOKEN:'fixture-not-real'},handleDiscord:async(request,env,user)=>{forwarded++;assert.equal(user.authenticated,true);assert.equal(env.SITE_ORIGIN,origin);return Response.json({ok:true});}});
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;

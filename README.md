@@ -7,7 +7,7 @@
 1. Создайте репозиторий, например lds-studio. Распакуйте архив и загрузите его файлы в корень репозитория (не сам ZIP), сохранив папки docs, bot-api и .github.
 2. Откройте Settings → Pages → Source → GitHub Actions.
 3. Workflow Publish LDS Studio автоматически опубликует только папку docs. Можно запустить его вручную через Actions → Publish LDS Studio → Run workflow.
-4. Адрес проекта обычно имеет вид https://USERNAME.github.io/lds-studio/. Для подключённого аккаунта GitHub найден логин HerodrineYT; если используете этот аккаунт, origin будет https://herodrineyt.github.io.
+4. Адрес проекта обычно имеет вид https://USERNAME.github.io/lds-studio/. Вы будете использовать аккаунт Lolekx228; origin сайта — https://lolekx228.github.io.
 
 Можно обойтись без Actions: в Settings → Pages выберите Deploy from a branch, ветку main и папку /docs. Тогда workflow-файл не нужен.
 
@@ -21,7 +21,7 @@ GitHub Pages размещает только статический сайт. П
 2. В .env существующего бота или его переменные окружения добавьте:
 
 ```env
-EDITOR_ALLOWED_ORIGIN=https://herodrineyt.github.io
+EDITOR_ALLOWED_ORIGIN=https://lolekx228.github.io
 TICKET_TRANSCRIPT_PORT=13579
 EDITOR_ACCESS_PASSWORD=ВАШ_ОТДЕЛЬНЫЙ_СЛУЧАЙНЫЙ_ПАРОЛЬ
 ```

@@ -12,7 +12,7 @@ export function authorize(user, env) {
 }
 async function discord(env, path, init = {}) {
   let response;
-  try { response = await fetch(API + path, { ...init, headers: { Authorization: 'Bot ' + env.DISCORD_TOKEN, 'Content-Type': 'application/json', 'User-Agent': 'DiscordBot (https://github.com/HerodrineYT, 1.0)', ...init.headers }, signal: AbortSignal.timeout(15000) }); }
+  try { response = await fetch(API + path, { ...init, headers: { Authorization: 'Bot ' + env.DISCORD_TOKEN, 'Content-Type': 'application/json', 'User-Agent': 'DiscordBot (https://github.com/Lolekx228, 1.0)', ...init.headers }, signal: AbortSignal.timeout(15000) }); }
   catch { throw new ApiError(502, init.method === 'POST' ? 'Discord не подтвердил отправку. Проверьте канал или повторите запрос: повтор использует тот же идентификатор сообщения.' : 'Не удалось связаться с Discord. Попробуйте ещё раз.', { uncertain: init.method === 'POST' }); }
   const data = await response.json().catch(() => ({}));
   if (response.ok) return data;
