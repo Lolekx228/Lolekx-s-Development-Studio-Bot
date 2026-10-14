@@ -1,0 +1,8 @@
+LDS Studio Classic is a modified copy of Discohook (classic).
+Original: https://github.com/discohook/site
+Upstream commit: 37388d8a013caa5c53e391e60d9776170d96d92f
+Copyright © 2025 The Discohook Authors.
+License: GNU Affero General Public License v3 or later (see LICENSE.txt).
+Modified 2026-10-14: LDS branding, bot API delivery, GitHub Pages static export, local sharing, Components V2 companion editor, Node compatibility.
+Source of modified version: https://github.com/Lolekx228/Lolekx-s-Development-Studio-Bot
+Provided without warranty. Not affiliated with Discohook or Discord.

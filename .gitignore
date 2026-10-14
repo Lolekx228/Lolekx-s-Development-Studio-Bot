@@ -1,7 +1,9 @@
 node_modules/
+source/build/
+source/.yarn/cache/
+source/.yarn/unplugged/
+source/.yarn/install-state.gz
+*.log
 .env
 .env.*
 !.env.example
-.dev.vars
-*.log
-*.lds-editor.bak
