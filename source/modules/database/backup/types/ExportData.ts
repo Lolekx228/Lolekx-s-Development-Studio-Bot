@@ -53,7 +53,7 @@ export type ExportData =
       }[]
     }
   | {
-      version: 7
+      version: 7 | 8
       backups: {
         name: string
         messages: {

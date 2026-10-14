@@ -1,5 +1,5 @@
 import { useObserver } from "mobx-react-lite"
-import React, { useRef } from "react"
+import React, { useRef, useState } from "react"
 import { PrimaryButton } from "../../../../common/input/button/PrimaryButton"
 import { SecondaryButton } from "../../../../common/input/button/SecondaryButton"
 import { ModalAction } from "../../../../common/modal/layout/ModalAction"
@@ -36,6 +36,8 @@ export function BackupsModal(props: BackupsModalProps) {
   const modal = useRequiredContext(ModalContext)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [importStatus,setImportStatus]=useState('')
+  const [pastedJson,setPastedJson]=useState('')
 
   return useObserver(() => (
     <DatabaseManagerProvider value={databaseManager}>
@@ -46,11 +48,11 @@ export function BackupsModal(props: BackupsModalProps) {
             type="file"
             style={{ display: "none" }}
             onChange={async event => {
-              const file = event.target.files?.item(0)?.slice()
-              event.target.files = null
+              const file = event.target.files?.[0]
+              event.target.value = ''
               if (file) {
-                await backupManager.importBackups(file)
-              }
+                try{await backupManager.importBackups(file);setImportStatus('Бекапы импортированы. Нажмите Load у нужного. Components V2 откроются в отдельном редакторе.')}catch(error){setImportStatus((error as Error).message)}
+              } else setImportStatus('Файл не выбран. Можно вставить содержимое JSON ниже.')
             }}
           />
           <ModalHeader>
@@ -67,10 +69,12 @@ export function BackupsModal(props: BackupsModalProps) {
             </ModalBody>
           )}
           <ModalBody>
+            {importStatus && <p role="status" aria-live="polite">{importStatus}</p>}
             <BackupList />
           </ModalBody>
           <ModalBody>
             <BackupCreationControls />
+            <details><summary>Вставить JSON бекапов</summary><textarea aria-label="JSON бекапов" value={pastedJson} onChange={event=>setPastedJson(event.target.value)} rows={6} style={{width:'100%',boxSizing:'border-box'}}/><SecondaryButton onClick={async()=>{try{await backupManager.importBackups(new Blob([pastedJson],{type:'application/json'}));setImportStatus('Бекапы импортированы. Нажмите Load у нужного.');setPastedJson('')}catch(error){setImportStatus((error as Error).message)}}}>Импортировать JSON</SecondaryButton></details>
           </ModalBody>
           <ModalFooter>
             <SecondaryButton onClick={async () => backupManager.exportAll()}>

@@ -128,10 +128,11 @@ export type HeaderItemOptions = {
 export type HeaderProps<T extends string> = {
   items: HeaderItemOptions[]
   tabs?: HeaderTabsProps<T>
+  account?: React.ReactNode
 }
 
 export function Header<T extends string>(props: HeaderProps<T>) {
-  const { items, tabs } = props
+  const { items, tabs, account } = props
 
   const theme = useTheme()
 
@@ -167,6 +168,7 @@ export function Header<T extends string>(props: HeaderProps<T>) {
         )}
       </Navigation>
       <div style={{ flex: 1 }} />
+      {account && <div style={{padding:'0 12px',position:'relative',zIndex:100,maxWidth:'55%'}}>{account}</div>}
       <OverflowButton>
         <IconButton
           icon={menu}

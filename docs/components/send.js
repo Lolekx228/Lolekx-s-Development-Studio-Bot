@@ -50,6 +50,7 @@ sendButton.onclick = async () => {
 
 function logoutLocal() {
   sessionToken = ''; connected = false; apiOrigin = '';
+  sessionStorage.removeItem('lds-editor-session-v1');$('#accountUser').hidden=true;
   $('#backendUrl').disabled = false; 
   $('#connectBackend').hidden = false; $('#disconnectBackend').hidden = true;
   $('#guildSelect').disabled = true; $('#channelSelect').disabled = true; $('#connectionStatus').textContent = 'Войдите через Discord для отправки'; syncSendButton();
@@ -83,13 +84,19 @@ sendResult('Редактор работает без подключения. Д�
 syncSendButton();
 
 (async()=>{
+  const button=$('#connectBackend');button.disabled=true;
   try{
-    const result=LDSDiscordLogin.takeResult(sessionStorage);if(!result)return;
-    const origin=backendOrigin(result.api);
-    const response=await fetch(origin+'/api/oauth/exchange',{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},body:JSON.stringify(result.body),signal:AbortSignal.timeout(15000)});
+    const result=LDSDiscordLogin.takeResult(sessionStorage);
+    let saved=null;try{saved=JSON.parse(sessionStorage.getItem('lds-editor-session-v1')||'null')}catch{sessionStorage.removeItem('lds-editor-session-v1')}
+    if(!result&&(!saved||!Number.isFinite(saved.expiresAt)||saved.expiresAt<=Date.now())){sessionStorage.removeItem('lds-editor-session-v1');return}
+    const origin=backendOrigin(result?result.api:saved.api);
+    const response=await fetch(origin+(result?'/api/oauth/exchange':'/api/session'),{method:result?'POST':'GET',credentials:'omit',headers:result?{'Content-Type':'application/json'}:{Authorization:'Bearer '+saved.token},body:result?JSON.stringify(result.body):undefined,signal:AbortSignal.timeout(15000)});
     if(!response.headers.get('content-type')?.includes('application/json'))throw Error('По этому адресу нет API редактора.');
-    const data=await response.json();if(!response.ok||!data.token)throw Error(data.error||'Вход не подтверждён.');
-    apiOrigin=origin;sessionToken=data.token;$('#backendUrl').value=origin;$('#backendUrl').disabled=true;$('#connectBackend').hidden=true;$('#disconnectBackend').hidden=false;
+    const data=await response.json();if(!response.ok){if(response.status===401)sessionStorage.removeItem('lds-editor-session-v1');throw Error(data.error||'Вход не подтверждён.')}
+    const token=result?data.token:saved.token;if(typeof token!=='string'||!token)throw Error('Сессия не подтверждена.');
+    if(result)sessionStorage.setItem('lds-editor-session-v1',JSON.stringify({token,api:origin,expiresAt:data.expires_at}));
+    apiOrigin=origin;sessionToken=token;$('#backendUrl').value=origin;$('#backendUrl').disabled=true;$('#connectBackend').hidden=true;$('#disconnectBackend').hidden=false;
+    $('#accountUser').textContent=(data.user?.name||'Аккаунт')+' ✓';$('#accountUser').hidden=false;
     await loadConnection();
-  }catch(error){sendResult(error.message,true)}
+  }catch(error){sendResult(error.message,true)}finally{button.disabled=false}
 })();

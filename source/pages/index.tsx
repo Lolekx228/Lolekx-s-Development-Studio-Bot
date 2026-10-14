@@ -18,6 +18,7 @@ import { EditorManager } from "../modules/editor/EditorManager"
 import { EditorManagerProvider } from "../modules/editor/EditorManagerContext"
 import { getEditorManagerFromQuery } from "../modules/editor/getEditorManagerFromQuery"
 import { Preview } from "../modules/message/preview/Preview"
+import { BotAccountProvider, AccountButton } from '../modules/editor/bot/BotAccount'
 
 const Container = styled.div`
   display: flex;
@@ -85,6 +86,7 @@ export default function Main(props: MainProps) {
 
   return useObserver(() => (
     <EditorManagerProvider value={editorManager}>
+      <BotAccountProvider>
       <PageHead
         title="LDS Studio"
         description="Discord message editor."
@@ -93,6 +95,7 @@ export default function Main(props: MainProps) {
       </PageHead>
       <Container>
         <Header
+          account={<AccountButton />}
           items={[
             { name: "Components V2", to: `${process.env.NEXT_PUBLIC_BASE_PATH}/components/`, newWindow: true },
             { name: "Source Code", to: "https://github.com/Lolekx228/Lolekx-s-Development-Studio-Bot", newWindow: true },
@@ -122,6 +125,7 @@ export default function Main(props: MainProps) {
           )}
         </View>
       </Container>
+      </BotAccountProvider>
     </EditorManagerProvider>
   ))
 }

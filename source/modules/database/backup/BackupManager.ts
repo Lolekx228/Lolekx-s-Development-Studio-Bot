@@ -10,6 +10,7 @@ import type { DatabaseManager } from "../DatabaseManager"
 import type { Backup } from "./types/Backup"
 import type { BackupData } from "./types/BackupData"
 import type { ExportData } from "./types/ExportData"
+import backupFormat from './format'
 
 export class BackupManager {
   private readonly databaseManager: DatabaseManager
@@ -70,6 +71,12 @@ export class BackupManager {
       .get(name)
 
     if (!backup) return
+
+    if (backup.messages.some(message => message.data.components?.length)) {
+      sessionStorage.setItem('lds-v2-backup-import', JSON.stringify({version:8,backups:[backup]}))
+      location.assign(process.env.NEXT_PUBLIC_BASE_PATH + '/components/')
+      return
+    }
 
     this.editorManager.set(
       "messages",
@@ -141,7 +148,7 @@ export class BackupManager {
     if (!backup) return
 
     const backupData: ExportData = {
-      version: 7,
+      version: 8,
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       backups: [backup].map(({ id, ...backup }) => backup),
     }
@@ -171,7 +178,7 @@ export class BackupManager {
     }
 
     const backupData: ExportData = {
-      version: 7,
+      version: 8,
       backups,
     }
 
@@ -197,7 +204,16 @@ export class BackupManager {
   }
 
   async importBackups(blob: Blob) {
+    if(blob.size>10*1024*1024)throw Error('Файл бекапов слишком большой (максимум 10 МБ).')
     let exportData = JSON.parse(await blob.text()) as ExportData
+
+    if(exportData.version === 7 || exportData.version === 8){
+      const backups=backupFormat.parseModern(exportData)
+      await this.databaseManager.initialized
+      for(const backup of backups)await this.saveBackup({...backup,name:await this.getSafeBackupName(backup.name),id:undefined})
+      return backups.length
+    }
+    if(![1,2,3,4,5,6].includes(exportData.version))throw Error('Неизвестная версия бекапа. Поддерживаются версии 1–8.')
 
     switch (exportData.version) {
       case 1:
@@ -260,7 +276,6 @@ export class BackupManager {
           })),
         }
       // falls through
-      case 7:
         for (const backup of exportData.backups) {
           await this.saveBackup({
             ...backup,

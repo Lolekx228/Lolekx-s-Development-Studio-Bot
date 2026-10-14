@@ -1,6 +1,7 @@
 'use strict';
 const embeds = require('./embed-core.js');
 const discordLogin = require('./oauth-browser.js');
+const SESSION_KEY='lds-editor-session-v1';
 function originOf(value) {
   const url = new URL(value);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || !['','/'].includes(url.pathname)) throw Error('Введите HTTPS-адрес API без пути и параметров.');
@@ -24,6 +25,7 @@ function botPayload(message) {
 class BotClient {
   constructor(fetchImpl = (...args) => fetch(...args), createId = () => crypto.randomUUID().replace(/-/g,'').slice(0,24)) {
     this.fetchImpl = fetchImpl; this.createId = createId; this.origin = ''; this.token = ''; this.batch = null;
+    this.store = null;
   }
   async request(path, options = {}, session = false) {
     const headers = { 'Content-Type':'application/json', ...options.headers };
@@ -39,8 +41,8 @@ class BotClient {
     if (!response.headers.get('content-type')?.includes('application/json')) throw Error('По этому адресу нет API редактора.');
     const data = await response.json();
     if (!response.ok) {
-      if (response.status === 401) this.token = '';
-      throw Error(data.error || 'Ошибка API (' + response.status + ')');
+      if (response.status === 401) { this.token = '';this.clearSavedSession(); }
+      throw Object.assign(Error(data.error || 'Ошибка API (' + response.status + ')'),{status:response.status});
     }
     return data;
   }
@@ -56,12 +58,27 @@ class BotClient {
     return discordLogin.begin((path,body)=>this.request(path,{method:'POST',body:JSON.stringify(body)},true),this.origin,returnUrl,store);
   }
   async finishDiscord(store = sessionStorage) {
+    this.store=store;
     const result=discordLogin.takeResult(store);if(!result)return null;
     this.origin=originOf(result.api);
     const session=await this.request('/api/oauth/exchange',{method:'POST',body:JSON.stringify(result.body)},true);
     if(!session.token||typeof session.token!=='string')throw Error('API не вернул сессию.');
     this.token=session.token;
+    this.saveSession(session,store);
     return {...await this.request('/api/discord/connection'),user:session.user};
+  }
+  saveSession(session,store) {
+    if(!Number.isFinite(session.expires_at)||session.expires_at<=Date.now())return;
+    try{store.setItem(SESSION_KEY,JSON.stringify({token:session.token,expiresAt:session.expires_at,api:this.origin}))}catch{}
+  }
+  clearSavedSession(){try{this.store?.removeItem(SESSION_KEY)}catch{}}
+  async restoreSession(store=sessionStorage){
+    this.store=store;let saved;
+    try{saved=JSON.parse(store.getItem(SESSION_KEY)||'null')}catch{this.clearSavedSession();return null}
+    if(!saved)return null;
+    if(typeof saved.token!=='string'||saved.expiresAt<=Date.now()||!Number.isFinite(saved.expiresAt)){this.clearSavedSession();return null}
+    try{this.origin=originOf(saved.api);this.token=saved.token;const session=await this.request('/api/session');return {...await this.request('/api/discord/connection'),user:session.user}}
+    catch(error){if(error.status===401){this.token='';this.clearSavedSession();return null}throw error}
   }
   channels(guild) { return this.request('/api/discord/channels?guild_id=' + encodeURIComponent(guild)); }
   async send(messages, channel, pings, onProgress = (done, total) => {}) {
@@ -79,7 +96,7 @@ class BotClient {
   }
   async disconnect() {
     try { if(this.token) await this.request('/api/session',{method:'DELETE'}); }
-    finally { this.token=''; this.origin=''; this.batch=null; }
+    finally { this.token=''; this.origin=''; this.batch=null;this.clearSavedSession(); }
   }
 }
 module.exports={BotClient,botPayload,originOf};
