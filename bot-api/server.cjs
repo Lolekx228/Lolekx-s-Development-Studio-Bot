@@ -10,11 +10,11 @@ function reply(res, status, value, origin) {
   if (origin) { headers['access-control-allow-origin'] = origin; headers['access-control-allow-methods'] = 'GET, POST, DELETE, OPTIONS'; headers['access-control-allow-headers'] = 'Authorization, Content-Type'; headers['access-control-max-age'] = '600'; }
   res.writeHead(status, headers); res.end(status === 204 ? undefined : JSON.stringify(value));
 }
-async function readBody(req) {
+async function readBody(req, multipart = false) {
   const chunks = []; let size = 0, tooLarge = false;
-  for await (const chunk of req) { size += chunk.length; if (size > 64000) { tooLarge = true; continue; } chunks.push(chunk); }
+  for await (const chunk of req) { size += chunk.length; if (size > (multipart ? 25*1024**2 : 64000)) { tooLarge = true; continue; } chunks.push(chunk); }
   if (tooLarge) { const e = Error('Запрос слишком большой.'); e.status = 413; throw e; }
-  return Buffer.concat(chunks).toString('utf8');
+  return multipart ? Buffer.concat(chunks) : Buffer.concat(chunks).toString('utf8');
 }
 async function createHandler(options = {}) {
   const settings = options.env || process.env;
@@ -70,7 +70,7 @@ async function createHandler(options = {}) {
       if (url.pathname === '/api/session' && req.method === 'DELETE') { sessions.delete(bearer); return reply(res, 200, { ok: true }, corsOrigin); }
       if (!url.pathname.startsWith('/api/discord/')) return reply(res, 404, { error: 'Маршрут не найден.' }, corsOrigin);
       if (!['GET', 'POST'].includes(req.method)) return reply(res, 405, { error: 'Метод не поддерживается.' }, corsOrigin);
-      const body = req.method === 'POST' ? await readBody(req) : undefined;
+      const body = req.method === 'POST' ? await readBody(req, req.headers['content-type']?.startsWith('multipart/form-data')) : undefined;
       const headers = new Headers(); if (requestOrigin) headers.set('origin', requestOrigin); if (req.headers['content-type']) headers.set('content-type', req.headers['content-type']);
       const request = new Request('https://backend.invalid' + url.pathname + url.search, { method: req.method, headers, body });
       const result = await service(request, env, { authenticated: true, discordUser: sessions.get(bearer).user });

@@ -16,7 +16,7 @@ const Select = styled.select`width:100%;padding:10px;border:1px solid ${({theme}
 const Note = styled.div`font-size:13px;line-height:1.4;color:${({theme})=>theme.text.muted};`
 type Item = {id:string;name:string;category?:string}
 export function DeliveryControls(props: WebhookControlsProps) {
-  const [mode,setMode]=useState<'bot'|'webhook'>('bot')
+  const {deliveryMode:mode,setDeliveryMode:setMode}=useBotAccount()
   return <Stack gap={12}>
     <ButtonList><SecondaryButton aria-pressed={mode==='bot'} onClick={()=>setMode('bot')}>LDS Bot</SecondaryButton><SecondaryButton aria-pressed={mode==='webhook'} onClick={()=>setMode('webhook')}>Webhook</SecondaryButton></ButtonList>
     <div style={{display:mode==='bot'?'block':'none'}}><BotControls /></div>
@@ -56,7 +56,7 @@ function BotControls() {
     try {
       const messages=manager.messages.map(message=>({...message.data,reference:message.reference}))
       const data=await client.send(messages,manual.trim()||channel,pings,(done:number,total:number)=>setStatus(`Отправлено ${done} / ${total}`))
-      setResults(data);setStatus('Сообщения отправлены.')
+      setResults(data);data.forEach((item:any,index:number)=>{const message=manager.messages[index];if(item.url){message.set('reference',item.url);message.set('files',[]);message.set('retainedAttachments',item.attachments||[])}});if(data.length&&data.every((item:any)=>item.channel_id===data[0].channel_id))setManual(data[0].channel_id);setStatus('Сообщения отправлены.')
     }catch(error){setStatus((error as Error).message);if(!client.token)account.invalidate()}
     finally{setSending(false)}
   }
@@ -66,9 +66,9 @@ function BotControls() {
     <label>Channel<Select aria-label="Channel" value={channel} onChange={event=>{setChannel(event.target.value);setManual('')}} disabled={busy||!guild}><option value="">Select channel</option>{channels.map(item=><option key={item.id} value={item.id}># {item.name}{item.category?' · '+item.category:''}</option>)}</Select></label>
     <details><summary>Channel / Thread ID</summary><InputField id="bot-channel-id" label="Channel ID" value={manual} onChange={setManual} disabled={busy}/></details>
     <label><input type="checkbox" checked={pings} onChange={event=>setPings(event.target.checked)} disabled={busy}/> Allow user and role mentions</label>
-    <ButtonList><PrimaryButton disabled={busy||!/^\d{17,20}$/.test(manual.trim()||channel)||!manager.messages.length} onClick={send}>{busy?'Sending…':'Send'}</PrimaryButton><SecondaryButton disabled={busy} onClick={()=>loadChannels(guild)}>Refresh</SecondaryButton></ButtonList></>}
+    <ButtonList><PrimaryButton disabled={busy||!/^\d{17,20}$/.test(manual.trim()||channel)||!manager.messages.length} onClick={send}>{busy?'Sending…':manager.messages.every(message=>message.reference)?'Edit':'Send / Edit'}</PrimaryButton><SecondaryButton disabled={busy} onClick={()=>loadChannels(guild)}>Refresh</SecondaryButton></ButtonList></>}
     <Note role="status" aria-live="polite">{account.error||status}</Note>
     {results.map((result,index)=>result.url?.startsWith('https://discord.com/channels/')?<a key={index} href={result.url} target="_blank" rel="noopener noreferrer">Open Message {index+1} ↗</a>:null)}
-    <details><summary>Отправка через бота и Webhook</summary><Note>Бот отправляет текст и embeds в выбранный канал. Имя и аватар берутся из профиля бота. Файлы, изменение профиля, создание форумной ветки и редактирование сообщений доступны в режиме Webhook. @everyone и @here отключены при отправке через бота.</Note></details>
+    <details><summary>Отправка через бота и Webhook</summary><Note>Бот отправляет текст, embeds и файлы; Message Link → Load загружает сообщение. Собственные сообщения бот редактирует, чужие можно загрузить как основу для нового. Thread Name создаёт пост в выбранном форуме. Имя и аватар отдельного сообщения меняются через Webhook. @everyone и @here у бота отключены.</Note></details>
   </Stack>)
 }

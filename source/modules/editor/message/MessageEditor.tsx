@@ -20,6 +20,7 @@ import type { DataEditorModalProps } from "../data/DataEditorModal"
 import { EditorManagerContext } from "../EditorManagerContext"
 import { EmbedEditor } from "./EmbedEditor"
 import { LoadClearMessageConfirmationModal } from "./LoadClearMessageConfirmationModal"
+import { useBotAccount } from '../bot/BotAccount'
 import { PrimaryContentEditor } from "./PrimaryContentEditor"
 
 const DataEditorModal = dynamic<DataEditorModalProps>(async () =>
@@ -46,6 +47,7 @@ export type MessageEditorProps = {
 
 export function MessageEditor(props: MessageEditorProps) {
   const { message, form } = props
+  const account=useBotAccount()
 
   const modalManager = useRequiredContext(ModalManagerContext)
   const editorManager = useRequiredContext(EditorManagerContext)
@@ -61,6 +63,15 @@ export function MessageEditor(props: MessageEditorProps) {
         <LoadClearMessageConfirmationModal
           editorManager={editorManager}
           message={message}
+          loadMessage={account.deliveryMode==='bot'?async reference=>{
+            const result=await account.client.loadMessage(reference)
+            if(result.payload.components?.length){
+              sessionStorage.setItem('lds-v2-backup-import',JSON.stringify({version:8,backups:[{name:'Loaded message',messages:[{data:result.payload,reference:result.editable?result.url:''}],targets:[]}]}))
+              location.assign(process.env.NEXT_PUBLIC_BASE_PATH+'/components/')
+              throw Error('Открываем редактор компонентов…')
+            }
+            return {data:result.payload,reference:result.editable?result.url:''}
+          }:undefined}
         />
       ),
     })

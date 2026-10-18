@@ -1,6 +1,7 @@
+import {createDelivery} from './delivery.mjs';
 import embedCore from './embed-core.cjs';
 const API = 'https://discord.com/api/v10';
-const CHANNEL_TYPES = new Set([0, 2, 5, 10, 11, 12]);
+
 const SNOWFLAKE = /^\d{17,20}$/;
 const SITE_ORIGIN = ''; // Origin задаётся в окружении Wispbyte.
 export class ApiError extends Error {
@@ -8,12 +9,12 @@ export class ApiError extends Error {
 }
 function json(data, status = 200) { return Response.json(data, { status, headers: { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } }); }
 export function authorize(user, env) {
-  if (user?.authenticated !== true) throw new ApiError(401, 'Войдите по паролю редактора.');
+  if (user?.authenticated !== true) throw new ApiError(401, 'Войдите в редактор через Discord.');
   if (!env.DISCORD_TOKEN) throw new ApiError(503, 'Токен бота не настроен на хостинге.');
 }
 async function discord(env, path, init = {}) {
   let response;
-  try { response = await fetch(API + path, { ...init, headers: { Authorization: 'Bot ' + env.DISCORD_TOKEN, 'Content-Type': 'application/json', 'User-Agent': 'DiscordBot (https://github.com/Lolekx228, 1.0)', ...init.headers }, signal: AbortSignal.timeout(15000) }); }
+  try { response = await fetch(API + path, { ...init, headers: { Authorization: 'Bot ' + env.DISCORD_TOKEN, ...(init.body instanceof FormData ? {} : {'Content-Type': 'application/json'}), 'User-Agent': 'DiscordBot (https://github.com/Lolekx228, 1.0)', ...init.headers }, signal: AbortSignal.timeout(25000) }); }
   catch { throw new ApiError(502, init.method === 'POST' ? 'Discord не подтвердил отправку. Проверьте канал или повторите запрос: повтор использует тот же идентификатор сообщения.' : 'Не удалось связаться с Discord. Попробуйте ещё раз.', { uncertain: init.method === 'POST' }); }
   const data = await response.json().catch(() => ({}));
   if (response.ok) return data;
@@ -51,14 +52,14 @@ async function channels(env, guildId) {
   await requireGuild(env, guildId);
   const bot = await discord(env, '/users/@me');
   const [all, roles, member] = await Promise.all([discord(env, '/guilds/' + guildId + '/channels'), discord(env, '/guilds/' + guildId + '/roles'), discord(env, '/guilds/' + guildId + '/members/' + bot.id)]);
-  return all.filter(c => [0, 2, 5].includes(c.type)).filter(c => { const p = permissions(c, guildId, roles, member, bot.id); return !!(p & 1024n) && !!(p & 2048n); }).sort((a, b) => (a.position || 0) - (b.position || 0)).map(c => ({ id: c.id, name: c.name, type: c.type, category: all.find(parent => parent.id === c.parent_id)?.name || '' }));
+  return all.filter(c => [0, 2, 5, 15, 16].includes(c.type)).filter(c => { const p = permissions(c, guildId, roles, member, bot.id); return !!(p & 1024n) && !!(p & 2048n); }).sort((a, b) => (a.position || 0) - (b.position || 0)).map(c => ({ id: c.id, name: c.name, type: c.type, category: all.find(parent => parent.id === c.parent_id)?.name || '' }));
 }
 function webUrl(value) { if (typeof value !== 'string') return false; try { return ['http:', 'https:'].includes(new URL(value).protocol); } catch { return false; } }
 function cleanText(value, max, label) { if (typeof value !== 'string' || !value.trim() || value.length > max) throw new ApiError(400, label + ': пустое значение или превышен лимит ' + max + '.'); return value.replace(/@everyone/g, '@\u200beveryone').replace(/@here/g, '@\u200bhere'); }
-export function preparePayload(input, pings = false) {
+export function preparePayload(input, pings = false, options = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ApiError(400, 'Нужен JSON-объект сообщения.');
-  const maxJson=input.embeds?.length?14000:4000;if (JSON.stringify(input).length > maxJson) throw new ApiError(400, 'JSON превышает лимит редактора: '+maxJson+' символов.');
-  if (input.attachments?.length) throw new ApiError(400, 'Вложения пока не поддерживаются.');
+  if (JSON.stringify(input).length > 64000) throw new ApiError(400, 'JSON превышает 64000 символов.');
+  if(input.username||input.avatar_url)throw new ApiError(400,'Имя и аватар отдельного сообщения меняются в режиме Webhook.');
   let count = 0, totalText = 0, v2 = false; const customIds = new Set();
   function customId(c) { if (typeof c.custom_id !== 'string' || !c.custom_id || c.custom_id.length > 100 || customIds.has(c.custom_id)) throw new ApiError(400, 'Custom ID должен быть уникальной строкой до 100 символов.'); customIds.add(c.custom_id); return c.custom_id; }
   function emoji(e) { if (!e || typeof e !== 'object') return undefined; const out = {}; if (e.id && SNOWFLAKE.test(String(e.id))) out.id = String(e.id); if (typeof e.name === 'string') out.name = e.name.slice(0, 100); if (e.animated) out.animated = true; return Object.keys(out).length ? out : undefined; }
@@ -107,36 +108,23 @@ export function preparePayload(input, pings = false) {
   if(input.embeds!==undefined){try{const embeds=embedCore.prepare(input.embeds);if(embeds.length)out.embeds=embeds;}catch(error){throw new ApiError(400,error.message)}}
   if(out.embeds?.length&&(v2||(Number(input.flags)&32768)))throw new ApiError(400,'Embeds нельзя смешивать с Components V2.');
   if(!v2&&out.components?.length>5)throw new ApiError(400,'Максимум 5 рядов компонентов в обычном сообщении.');
-  if (!out.content && !out.components?.length && !out.embeds?.length) throw new ApiError(400, 'Сообщение пустое.');
-  if (v2 && out.content) throw new ApiError(400, 'Перенесите content в текстовый блок Components V2.');
+  if (!out.content && !out.components?.length && !out.embeds?.length && !options.hasFiles && !input.attachments?.length) throw new ApiError(400, 'Сообщение пустое.');
+  if ((v2 || (Number(input.flags)&32768)) && out.content) throw new ApiError(400, 'Перенесите content в текстовый блок Components V2.');
   if (totalText > 4000) throw new ApiError(400, 'Текст компонентов превышает 4000 символов.');
-  const flags = (v2 ? 32768 : 0) | (Number(input.flags) & 4); if (flags) out.flags = flags;
+  const flags = (v2 || (Number(input.flags)&32768) ? 32768 : 0) | (Number(input.flags) & (4|4096)); if (flags) out.flags = flags;
   return out;
 }
-async function send(env, body) {
-  if (!SNOWFLAKE.test(body.channel_id || '')) throw new ApiError(400, 'Выберите канал или укажите его ID.');
-  if (typeof body.request_id !== 'string' || !/^[a-zA-Z0-9_-]{8,25}$/.test(body.request_id)) throw new ApiError(400, 'Неверный идентификатор отправки.');
-  const payload = preparePayload(body.payload, body.pings);
-  const channel = await discord(env, '/channels/' + body.channel_id);
-  if (!channel.guild_id || !CHANNEL_TYPES.has(channel.type)) throw new ApiError(400, 'Можно отправить в текстовый канал, канал объявлений, чат войса или ветку. Для форума выберите существующую ветку.');
-  await requireGuild(env, channel.guild_id);
-  if (channel.thread_metadata?.archived || channel.thread_metadata?.locked) throw new ApiError(400, 'Ветка закрыта или находится в архиве. Откройте её в Discord.');
-  payload.nonce = body.request_id; payload.enforce_nonce = true;
-  const sent = await discord(env, '/channels/' + channel.id + '/messages', { method: 'POST', body: JSON.stringify(payload) });
-  return { id: sent.id, channel_id: sent.channel_id, url: 'https://discord.com/channels/' + channel.guild_id + '/' + sent.channel_id + '/' + sent.id };
-}
+const delivery=createDelivery({discord,preparePayload,requireGuild,ApiError});
 export async function handleDiscord(request, env, user) {
   try {
     authorize(user, env);
     const url = new URL(request.url), path = url.pathname.replace(/^\/api\/discord/, '');
     if (request.method === 'GET' && path === '/connection') { const [bot, servers] = await Promise.all([discord(env, '/users/@me'), guilds(env)]); return json({ bot: { id: bot.id, name: bot.global_name || bot.username }, guilds: servers }); }
     if (request.method === 'GET' && path === '/channels') return json({ channels: await channels(env, url.searchParams.get('guild_id')) });
-    if (request.method === 'POST' && path === '/messages') {
-      if (request.headers.get('origin') !== (env.SITE_ORIGIN || SITE_ORIGIN) || !request.headers.get('content-type')?.startsWith('application/json')) throw new ApiError(403, 'Неверный источник запроса. Обновите страницу сайта.');
-      if (Number(request.headers.get('content-length') || 0) > 64000) throw new ApiError(413, 'Запрос слишком большой.');
-      const text = await request.text(); if (text.length > 64000) throw new ApiError(413, 'Запрос слишком большой.');
-      let body; try { body = JSON.parse(text); } catch { throw new ApiError(400, 'Невалидный JSON.'); }
-      return json(await send(env, body));
+    if(request.method==='GET'&&path==='/messages')return json(await delivery.load(env,url.searchParams.get('channel_id'),url.searchParams.get('message_id')));
+    if(request.method==='POST'&&path==='/messages'){
+      if(request.headers.get('origin')!==(env.SITE_ORIGIN||SITE_ORIGIN))throw new ApiError(403,'Неверный источник запроса.');
+      const {body,files}=await delivery.read(request);return json(await delivery.send(env,body,files));
     }
     return json({ error: 'Маршрут не найден.' }, 404);
   } catch (e) {

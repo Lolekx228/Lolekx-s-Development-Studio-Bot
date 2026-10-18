@@ -13,10 +13,12 @@ import { useRequiredContext } from "../../../common/state/useRequiredContext"
 import { remove } from "../../../icons/remove"
 import { Markdown } from "../../markdown/Markdown"
 import { messageOf } from "../../message/helpers/messageOf"
+import type { MessageData } from '../../message/state/data/MessageData'
 import type { MessageLike } from "../../message/state/models/MessageModel"
 import type { EditorManagerLike } from "../EditorManager"
 
 export type LoadClearMessageConfirmationModalProps = {
+  loadMessage?: (reference:string)=>Promise<{data:MessageData;reference:string}>
   editorManager: EditorManagerLike
   message: MessageLike
 }
@@ -55,11 +57,11 @@ export function LoadClearMessageConfirmationModal(
         </SecondaryButton>
         <PrimaryButton
           onClick={async () => {
-            let data
+            let data,reference=message.reference
             try {
-              data = await editorManager.getMessage(message.reference)
-            } catch {
-              // Handle later
+              if(props.loadMessage){const result=await props.loadMessage(message.reference);data=result.data;reference=result.reference}else data = await editorManager.getMessage(message.reference)
+            } catch(error) {
+              setError((error as Error).message);return
             }
             if (!data) {
               setError(
@@ -68,8 +70,13 @@ export function LoadClearMessageConfirmationModal(
               return
             }
 
+            if(data.components?.length){
+              sessionStorage.setItem('lds-v2-backup-import',JSON.stringify({version:8,backups:[{name:'Loaded message',messages:[{data,reference}],targets:editorManager.targets.map(target=>({url:target.url}))}]}))
+              location.assign(process.env.NEXT_PUBLIC_BASE_PATH+'/components/')
+              return
+            }
             const newMessage = messageOf(data)
-            newMessage.reference = message.reference
+            newMessage.reference = reference
 
             const index = editorManager.messages.indexOf(message)
             const messages = [...editorManager.messages]

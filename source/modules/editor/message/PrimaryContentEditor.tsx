@@ -94,6 +94,7 @@ export function PrimaryContentEditor(props: PrimaryContentEditorProps) {
           />
         </Stack>
       </Section>
+      {message.retainedAttachments.length>0&&<div><strong>Attached files</strong>{message.retainedAttachments.map(file=><div key={file.id}>{file.filename} <button type="button" onClick={()=>message.set('retainedAttachments',message.retainedAttachments.filter(item=>item.id!==file.id))}>Remove</button></div>)}</div>}
       <FileInputField
         id={`_${message.id}_files`}
         label="Files"

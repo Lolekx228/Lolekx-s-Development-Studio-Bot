@@ -12,3 +12,5 @@ Modified 2026-10-15: backup version 8 compatibility, lossless component routing,
 Modified 2026-10-18: Components companion shell aligned with classic editor layout, shared backup library, local message sharing, accordion blocks and mobile pane tabs. Companion sources: components-source/.
 
 Modified 2026-10-18: remember opened backups, explicit overwrite control and preservation of other messages and backup metadata.
+
+Modified 2026-10-18: dual delivery modes, bot message loading/editing, multipart uploads, attachment retention and forum posts. Discord API documentation referenced in ОБА-СПОСОБА-ОТПРАВКИ.txt.

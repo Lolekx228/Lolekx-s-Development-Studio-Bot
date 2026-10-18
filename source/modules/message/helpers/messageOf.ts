@@ -9,6 +9,11 @@ export const messageOf = (data: MessageData) => {
   snapshot.content = data.content ?? ""
   snapshot.username = data.username ?? ""
   snapshot.avatar = data.avatar_url ?? ""
+  snapshot.flags_suppress_embeds = Boolean((data.flags || 0) & 4)
+  snapshot.flags_suppress_notifications = Boolean((data.flags || 0) & 4096)
+  snapshot.thread_name = data.thread_name ?? ""
+  snapshot.applied_tags = data.applied_tags ?? []
+  snapshot.retainedAttachments = data.attachments ?? []
 
   const embeds: Record<string, unknown>[] = []
   snapshot.embeds = embeds

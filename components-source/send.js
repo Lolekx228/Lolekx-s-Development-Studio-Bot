@@ -3,12 +3,12 @@ let connected = false, sending = false, guildLoad = 0, pendingSend = null;
 let sessionToken = '', apiOrigin = '';
 const sendButton = $('#sendMessage');
 function sendDestination() { const manual = $('#channelId').value.trim(); return manual || $('#channelSelect').value; }
-function syncSendButton() { sendButton.disabled = sending || !connected || dirty || validate(state).errors.length > 0 || !/^\d{17,20}$/.test(sendDestination()); const options=document.getElementById('sendOptions');if(options)options.hidden=!connected;document.querySelector('.send-heading').hidden=!connected;document.getElementById('connectionStatus').hidden=!connected; }
+function syncSendButton() { sendButton.disabled = sending || !connected || dirty || !/^\d{17,20}$/.test(sendDestination()); const options=document.getElementById('sendOptions');if(options)options.hidden=!connected;document.querySelector('.send-heading').hidden=!connected;document.getElementById('connectionStatus').hidden=!connected; }
 function sendResult(message, isError = false) { const result = $('#sendResult'); result.textContent = message; result.classList.toggle('send-error', isError); }
 async function api(path, options = {}) {
   if (!sessionToken || !apiOrigin) throw Error('Сначала войдите через Discord.');
   let response;
-  try { response = await fetch(apiOrigin + '/api/discord' + path, { ...options, headers: { ...options.headers, Authorization: 'Bearer ' + sessionToken }, cache: 'no-store', credentials: 'omit', signal: AbortSignal.timeout(25000) }); }
+  try { response = await fetch(apiOrigin + '/api/discord' + path, { ...options, headers: { ...(typeof options.body==='string'?{'Content-Type':'application/json'}:{}), ...options.headers, Authorization: 'Bearer ' + sessionToken }, cache: 'no-store', credentials: 'omit', signal: AbortSignal.timeout(25000) }); }
   catch { const e = Error('API бота не отвечает. Проверьте HTTPS-адрес, доступность Wispbyte и EDITOR_ALLOWED_ORIGIN.'); e.uncertain = options.method === 'POST'; throw e; }
   if (!response.headers.get('content-type')?.includes('application/json')) throw Error('По этому адресу нет API редактора. Проверьте адрес хостинга бота.');
   const data = await response.json();

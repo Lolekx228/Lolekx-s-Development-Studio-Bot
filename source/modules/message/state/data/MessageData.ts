@@ -9,5 +9,6 @@ export type MessageData = {
   readonly files?: readonly File[]
   readonly attachments?: readonly unknown[]
   readonly thread_name?: string | null
+  readonly applied_tags?: readonly string[]
   readonly flags?: number
 }

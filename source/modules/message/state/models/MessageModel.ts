@@ -15,11 +15,13 @@ export const MessageModel = types
     avatar: "",
     embeds: types.array(types.late(() => EmbedModel)),
     thread_name: types.optional(types.string, ""),
+    applied_tags: types.optional(types.frozen<readonly string[]>(), []),
     reference: "",
     timestamp: types.optional(nullableDate, null),
     badge: types.optional(types.maybeNull(types.string), "Bot"),
     flags_suppress_embeds: types.optional(types.boolean, false),
     flags_suppress_notifications: types.optional(types.boolean, false), // silent
+    retainedAttachments: types.optional(types.frozen<readonly {id:string;filename:string;url?:string;description?:string}[]>(), []),
   })
   .volatile(() => ({
     files: [] as readonly File[],
@@ -57,14 +59,15 @@ export const MessageModel = types
         username: self.username || undefined,
         avatar_url: self.avatar || undefined,
         files: self.files.length > 0 ? Array.from(self.files) : undefined,
-        attachments: self.files.length === 0 ? [] : undefined,
+        attachments: self.retainedAttachments,
         thread_name: self.thread_name || undefined,
+        applied_tags: self.applied_tags.length ? self.applied_tags : undefined,
         flags: flags === 0 ? undefined : flags,
       }
     },
 
     get body() {
-      const json = stringifyMessage(this.data, false)
+      const json = stringifyMessage({...this.data,attachments:[...self.retainedAttachments,...self.files.map((file,index)=>({id:index,filename:file.name}))]}, false)
 
       if (self.files.length > 0) {
         const formData = new FormData()
@@ -72,7 +75,7 @@ export const MessageModel = types
         if (json !== "{}") formData.append("payload_json", json)
 
         for (const [index, file] of self.files.entries()) {
-          formData.append(`file[${index}]`, file, file.name)
+          formData.append(`files[${index}]`, file, file.name)
         }
 
         return formData
