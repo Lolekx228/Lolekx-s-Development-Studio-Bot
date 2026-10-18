@@ -3,7 +3,7 @@ let connected = false, sending = false, guildLoad = 0, pendingSend = null;
 let sessionToken = '', apiOrigin = '';
 const sendButton = $('#sendMessage');
 function sendDestination() { const manual = $('#channelId').value.trim(); return manual || $('#channelSelect').value; }
-function syncSendButton() { sendButton.disabled = sending || !connected || dirty || validate(state).errors.length > 0 || !/^\d{17,20}$/.test(sendDestination()); }
+function syncSendButton() { sendButton.disabled = sending || !connected || dirty || validate(state).errors.length > 0 || !/^\d{17,20}$/.test(sendDestination()); const options=document.getElementById('sendOptions');if(options)options.hidden=!connected;document.querySelector('.send-heading').hidden=!connected;document.getElementById('connectionStatus').hidden=!connected; }
 function sendResult(message, isError = false) { const result = $('#sendResult'); result.textContent = message; result.classList.toggle('send-error', isError); }
 async function api(path, options = {}) {
   if (!sessionToken || !apiOrigin) throw Error('Сначала войдите через Discord.');

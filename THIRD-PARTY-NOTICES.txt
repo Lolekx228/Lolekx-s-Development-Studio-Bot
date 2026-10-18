@@ -8,3 +8,5 @@ Source of modified version: https://github.com/Lolekx228/Lolekx-s-Development-St
 Provided without warranty. Not affiliated with Discohook or Discord.
 Modified 2026-10-15: Discord OAuth login with owner allowlist, browser-bound handoff and draft preservation.
 Modified 2026-10-15: backup version 8 compatibility, lossless component routing, JSON-paste import, header account controls and per-tab session restoration.
+
+Modified 2026-10-18: Components companion shell aligned with classic editor layout, shared backup library, local message sharing, accordion blocks and mobile pane tabs. Companion sources: components-source/.
