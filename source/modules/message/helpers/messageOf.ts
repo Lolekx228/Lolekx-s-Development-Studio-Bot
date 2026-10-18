@@ -9,6 +9,7 @@ export const messageOf = (data: MessageData) => {
   snapshot.content = data.content ?? ""
   snapshot.username = data.username ?? ""
   snapshot.avatar = data.avatar_url ?? ""
+  snapshot.components = data.components ?? []
   snapshot.flags_suppress_embeds = Boolean((data.flags || 0) & 4)
   snapshot.flags_suppress_notifications = Boolean((data.flags || 0) & 4096)
   snapshot.thread_name = data.thread_name ?? ""

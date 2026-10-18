@@ -65,7 +65,7 @@ export function MessageEditor(props: MessageEditorProps) {
           message={message}
           loadMessage={account.deliveryMode==='bot'?async reference=>{
             const result=await account.client.loadMessage(reference)
-            if(result.payload.components?.length){
+            if((result.payload.flags&32768)||result.payload.components?.some((item:any)=>item.type!==1)){
               sessionStorage.setItem('lds-v2-backup-import',JSON.stringify({version:8,backups:[{name:'Loaded message',messages:[{data:result.payload,reference:result.editable?result.url:''}],targets:[]}]}))
               location.assign(process.env.NEXT_PUBLIC_BASE_PATH+'/components/')
               throw Error('Открываем редактор компонентов…')

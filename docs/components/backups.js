@@ -13,9 +13,9 @@ function selectBackupFile(value){
  select.onchange();backupDialog.showModal();
 }
 document.getElementById('openBackup').onclick=()=>{
- try{const selection=Number(document.getElementById('backupChoice').value);const payload=normalize(JSON.parse(JSON.stringify(importedMessages[selection])));apply(payload);window.dispatchEvent(new CustomEvent('lds-backup-opened',{detail:importedSelections[selection]}));rawMode=false;dirty=false;$('#visualTab').click();backupDialog.close();toast('Бекап открыт без удаления компонентов и вложений.')}catch(error){document.getElementById('backupWarning').textContent=error.message}
+ try{const selection=Number(document.getElementById('backupChoice').value);const payload=normalize(JSON.parse(JSON.stringify(importedMessages[selection])));if(!LDSBackupFormat.isV2(payload)&&window.LDSOpenClassicEditor){window.LDSOpenClassicEditor(payload,{openedBackup:importedSelections[selection]});return;}apply(payload);window.dispatchEvent(new CustomEvent('lds-backup-opened',{detail:importedSelections[selection]}));rawMode=false;dirty=false;$('#visualTab').click();backupDialog.close();toast('Бекап открыт без удаления компонентов и вложений.')}catch(error){document.getElementById('backupWarning').textContent=error.message}
 };
-document.getElementById('cancelBackup').onclick=()=>backupDialog.close();
+document.getElementById('cancelBackup').onclick=()=>{backupDialog.close();if(!LDSBackupFormat.isV2(state)&&window.LDSOpenClassicEditor)window.LDSOpenClassicEditor(state)};
 $('#file').onchange=async event=>{
  const file=event.target.files[0];if(!file)return;
  try{if(file.size>10*1024*1024)throw Error('Максимальный размер файла: 10 МБ.');const value=JSON.parse(await file.text());if(Array.isArray(value.backups))selectBackupFile(value);else{const payload=normalize(value);if(confirm('Заменить текущее сообщение импортированным?'))apply(payload)}}catch(error){toast('Не удалось импортировать: '+error.message)}event.target.value='';

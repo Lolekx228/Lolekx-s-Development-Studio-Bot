@@ -9,8 +9,9 @@ type Connection={bot:{name:string};guilds:{id:string;name:string}[];user:{id:str
 type Account={deliveryMode:'bot'|'webhook';setDeliveryMode:(mode:'bot'|'webhook')=>void;client:InstanceType<typeof clientApi.BotClient>;url:string;setUrl:(url:string)=>void;connection:Connection|null;busy:boolean;error:string;login:()=>Promise<void>;logout:()=>Promise<void>;invalidate:()=>void}
 const Context=createContext<Account|null>(null)
 export function useBotAccount(){const value=useContext(Context);if(!value)throw Error('Bot account provider missing');return value}
-export function BotAccountProvider({children}:{children:React.ReactNode}){
- const [deliveryMode,setDeliveryMode]=useState<'bot'|'webhook'>('bot')
+export function BotAccountProvider({children,initialMode='bot'}:{children:React.ReactNode;initialMode?:'bot'|'webhook'}){
+ const [deliveryMode,setDeliveryMode]=useState<'bot'|'webhook'>(initialMode)
+ useEffect(()=>setDeliveryMode(initialMode),[initialMode])
  const manager=useRequiredContext(EditorManagerContext)
  const client=useRef(new clientApi.BotClient()).current
  const [url,setUrl]=useState('https://lolekx-api.wispbyte.app'),[connection,setConnection]=useState<Connection|null>(null),[busy,setBusy]=useState(true),[error,setError]=useState('')

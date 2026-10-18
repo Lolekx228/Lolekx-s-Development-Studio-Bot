@@ -60,6 +60,7 @@ export const WebhookModel = types
           routeUrl.searchParams.set("thread_id", threadParam)
         }
 
+        routeUrl.searchParams.set('with_components','true')
         return ["PATCH", String(routeUrl)]
       }
 
@@ -70,6 +71,7 @@ export const WebhookModel = types
         routeUrl.searchParams.set("thread_id", threadParam)
       }
 
+      routeUrl.searchParams.set('with_components','true')
       return ["POST", String(routeUrl)]
     },
   }))

@@ -11,6 +11,7 @@ import type { MessageLike } from "../state/models/MessageModel"
 import type { AttachmentProps } from "./attachment/Attachment"
 import { MessageHeader } from "./MessageHeader"
 import { RichEmbed } from "./RichEmbed"
+import {LegacyComponents} from './LegacyComponents'
 
 const Attachment = dynamic<AttachmentProps>(async () =>
   import("./attachment/Attachment").then(module => module.Attachment),
@@ -119,6 +120,7 @@ export function MessagePreview(props: MessagePreviewProps) {
             ...message.embeds.map(embed => (
               <RichEmbed key={`Embed ${embed.id}`} embed={embed} />
             )),
+            ...(message.components.length?[<LegacyComponents key="components" components={message.components}/>]:[]),
           ]}
         </ExtrasContainer>
       )}

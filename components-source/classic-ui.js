@@ -5,6 +5,15 @@
  try{activeBackup=JSON.parse(sessionStorage.getItem(activeKey)||'null')}catch{}
  function setActive(value){activeBackup=value;try{if(value)sessionStorage.setItem(activeKey,JSON.stringify(value));else sessionStorage.removeItem(activeKey)}catch{}byId('classicOverwriteBackup').hidden=!value;byId('classicOverwriteBackup').textContent=value?'Перезаписать бекап: '+value.backup.name:'Перезаписать бекап';if(value)byId('classicBackupName').value=value.backup.name}
  setActive(activeBackup);
+ window.LDSOpenClassicEditor=(payload,options={})=>{
+  if(window.ldsDeliveryHasFiles?.())throw Error('Перед переходом удалите новые файлы из текущего редактора и прикрепите их в Files классического редактора.');
+  if(LDSBackupFormat.isV2(payload))throw Error('Components V2 используют отдельную структуру Discord. Для embeds откройте обычное сообщение.');
+  const selection=options.openedBackup===undefined?activeBackup:options.openedBackup;
+  const reference=options.reference===undefined?(selection?.backup.messages[selection.messageIndex]?.reference||byId('deliveryMessageLink')?.value||''):options.reference;
+  const targets=options.targets||selection?.backup.targets||[];
+  const transfer={messages:[{data:JSON.parse(JSON.stringify(payload)),reference}],targets,openedBackup:selection||undefined,deliveryMode:byId('deliveryWebhookPanel')?.hidden===false?'webhook':'bot'};
+  sessionStorage.setItem('lds-classic-editor-import',JSON.stringify(transfer));location.assign(new URL('../',location.href).href);
+ };
  window.addEventListener('lds-backup-opened',event=>setActive(event.detail));
  window.addEventListener('lds-backup-detached',()=>setActive(null));
  document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>byId(button.dataset.close).close());
@@ -35,4 +44,5 @@
  byId('classicExportBackups').onclick=async()=>{try{await refresh();download({version:8,backups:rows.map(record=>{const copy=JSON.parse(JSON.stringify(record));delete copy.id;return copy})},'lds-backups.json')}catch(error){byId('classicBackupStatus').textContent=error.message}};
  byId('file').addEventListener('change',event=>{if(event.target.files.length)byId('classicBackupsDialog').close()});
  try{const encoded=new URLSearchParams(location.search).get('data');if(encoded){setActive(null);if(encoded.length>200000)throw Error('Ссылка слишком большая');const base64=encoded.replace(/-/g,'+').replace(/_/g,'/');const data=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(base64),c=>c.charCodeAt(0))));if(!Array.isArray(data.messages)||!data.messages.length)throw Error('В ссылке нет сообщений');if(data.messages.length===1)apply(normalize(data.messages[0].data));else selectBackupFile({version:8,backups:[{name:'Shared message',messages:data.messages,targets:[]}]})}}catch(error){toast('Не удалось открыть ссылку: '+error.message)}
+ if(!LDSBackupFormat.isV2(state)&&!backupDialog.open)window.LDSOpenClassicEditor(state);
 })();

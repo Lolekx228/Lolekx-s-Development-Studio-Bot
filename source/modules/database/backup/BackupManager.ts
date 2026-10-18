@@ -11,8 +11,7 @@ import type { Backup } from "./types/Backup"
 import type { BackupData } from "./types/BackupData"
 import type { ExportData } from "./types/ExportData"
 import backupFormat from './format'
-
-const openedBackups = new WeakMap<EditorManagerLike, string>()
+import {getOpenedBackup,rememberOpenedBackup} from './openedBackup'
 
 export class BackupManager {
   private readonly databaseManager: DatabaseManager
@@ -27,7 +26,7 @@ export class BackupManager {
   ) {
     this.databaseManager = databaseManager
     this.editorManager = editorManager
-    this.activeName = openedBackups.get(editorManager) || ""
+    this.activeName = getOpenedBackup(editorManager)?.backup.name || ""
 
     databaseManager.initialized
       .then(async () => {
@@ -77,9 +76,9 @@ export class BackupManager {
     if (!backup) return
 
     this.activeName = backup.name
-    openedBackups.set(this.editorManager, backup.name)
+    rememberOpenedBackup(this.editorManager,{backup})
 
-    if (backup.messages.some(message => message.data.components?.length)) {
+    if (backup.messages.some(message => backupFormat.isV2(message.data))) {
       sessionStorage.setItem('lds-v2-backup-import', JSON.stringify({version:8,backups:[backup]}))
       location.assign(process.env.NEXT_PUBLIC_BASE_PATH + '/components/')
       return
@@ -101,6 +100,7 @@ export class BackupManager {
   async saveBackup(backup: string | Backup) {
     const fromEditor = typeof backup === "string"
     if (typeof backup === "string") {
+      const name = backup
       const id = await this.getId(backup)
 
       backup = {
@@ -116,6 +116,15 @@ export class BackupManager {
         targets: this.editorManager.targets.map(target => ({
           url: target.url,
         })),
+      }
+      const opened=getOpenedBackup(this.editorManager)
+      if(opened?.backup.name===name && opened.messageIndex!==undefined){
+        const previous=await this.databaseManager.database.transaction('backup').objectStore('backup').index('name').get(name)
+        if(previous && opened.backup.id!==undefined && previous.id!==opened.backup.id)throw Error('Бекап изменился. Откройте его заново.')
+        const preserved=JSON.parse(JSON.stringify(previous||opened.backup)) as Backup
+        if(opened.messageIndex<0 || opened.messageIndex>=preserved.messages.length)throw Error('Сообщение удалено из бекапа. Откройте его заново.')
+        preserved.messages.splice(opened.messageIndex,opened.messageCount||1,...backup.messages)
+        backup={...preserved,id,name,targets:backup.targets.map((target,index)=>({...preserved.targets[index],...target}))}
       }
     } else {
       backup = {
@@ -134,7 +143,8 @@ export class BackupManager {
     await this.loadBackupList()
     if (fromEditor) {
       this.activeName = backup.name
-      openedBackups.set(this.editorManager, backup.name)
+      const opened=getOpenedBackup(this.editorManager)
+      rememberOpenedBackup(this.editorManager,{backup,messageIndex:opened?.backup.name===backup.name?opened.messageIndex:undefined,messageCount:this.editorManager.messages.length})
     }
   }
 

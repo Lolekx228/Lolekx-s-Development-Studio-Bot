@@ -70,7 +70,7 @@ export function LoadClearMessageConfirmationModal(
               return
             }
 
-            if(data.components?.length){
+            if(((data.flags||0)&32768)||data.components?.some((item:any)=>item.type!==1)){
               sessionStorage.setItem('lds-v2-backup-import',JSON.stringify({version:8,backups:[{name:'Loaded message',messages:[{data,reference}],targets:editorManager.targets.map(target=>({url:target.url}))}]}))
               location.assign(process.env.NEXT_PUBLIC_BASE_PATH+'/components/')
               return

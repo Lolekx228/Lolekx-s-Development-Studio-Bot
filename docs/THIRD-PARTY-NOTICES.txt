@@ -14,3 +14,5 @@ Modified 2026-10-18: Components companion shell aligned with classic editor layo
 Modified 2026-10-18: remember opened backups, explicit overwrite control and preservation of other messages and backup metadata.
 
 Modified 2026-10-18: dual delivery modes, bot message loading/editing, multipart uploads, attachment retention and forum posts. Discord API documentation referenced in ОБА-СПОСОБА-ОТПРАВКИ.txt.
+
+Modified 2026-10-18: original Discohook embed editing forms used for all classic messages, including action rows; lossless editor bridge and mixed-backup overwrite preservation. Original embed editing components remain unchanged.

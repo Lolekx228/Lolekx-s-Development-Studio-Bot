@@ -14,6 +14,7 @@ export const MessageModel = types
     username: "",
     avatar: "",
     embeds: types.array(types.late(() => EmbedModel)),
+    components: types.optional(types.frozen<readonly unknown[]>(), []),
     thread_name: types.optional(types.string, ""),
     applied_tags: types.optional(types.frozen<readonly string[]>(), []),
     reference: "",
@@ -31,7 +32,7 @@ export const MessageModel = types
       return self.content.trim().length > 0
     },
     get hasExtras() {
-      return self.embeds.length > 0 || self.files.length > 0
+      return self.embeds.length > 0 || self.files.length > 0 || self.retainedAttachments.length > 0 || self.components.length > 0
     },
 
     get embedLength() {
@@ -56,6 +57,7 @@ export const MessageModel = types
       return {
         content: self.content || null,
         embeds: embeds.length > 0 ? embeds : null,
+        components: self.components.length ? self.components : undefined,
         username: self.username || undefined,
         avatar_url: self.avatar || undefined,
         files: self.files.length > 0 ? Array.from(self.files) : undefined,

@@ -19,6 +19,9 @@ import { EditorManagerProvider } from "../modules/editor/EditorManagerContext"
 import { getEditorManagerFromQuery } from "../modules/editor/getEditorManagerFromQuery"
 import { Preview } from "../modules/message/preview/Preview"
 import { BotAccountProvider, AccountButton } from '../modules/editor/bot/BotAccount'
+import {messageOf} from '../modules/message/helpers/messageOf'
+import {rememberOpenedBackup} from '../modules/database/backup/openedBackup'
+import backupFormat from '../modules/database/backup/format'
 
 const Container = styled.div`
   display: flex;
@@ -51,6 +54,7 @@ export type MainProps = {
 export default function Main(props: MainProps) {
   const { state } = props
   const [mobile, setMobile] = useState(false)
+  const [bridgeMode,setBridgeMode]=useState<'bot'|'webhook'>('bot')
 
   const editorManager = useLazyValue(() => EditorManager.create(state))
   useEffect(() => () => destroy(editorManager), [editorManager])
@@ -58,6 +62,18 @@ export default function Main(props: MainProps) {
   useEffect(() => {
     const restored = getEditorManagerFromQuery(Object.fromEntries(new URLSearchParams(location.search)))
     applySnapshot(editorManager, getSnapshot(restored)); destroy(restored)
+    const transfer=sessionStorage.getItem('lds-classic-editor-import')
+    if(transfer){
+      try{
+        const value=JSON.parse(transfer)
+        if(!Array.isArray(value.messages)||!value.messages.length||value.messages.some((item:any)=>!item.data||backupFormat.isV2(item.data)))throw Error('Неверный формат классического сообщения.')
+        editorManager.set('messages',value.messages.map((item:any)=>({...messageOf(item.data),reference:item.reference||''})))
+        editorManager.set('targets',value.targets||[])
+        if(value.openedBackup){backupFormat.parseModern({version:8,backups:[value.openedBackup.backup]});rememberOpenedBackup(editorManager,value.openedBackup)}
+        if(value.deliveryMode==='webhook')setBridgeMode('webhook')
+      }catch{console.warn('Не удалось открыть сообщение в классическом редакторе. Исходный бекап остаётся в библиотеке.')}
+      finally{sessionStorage.removeItem('lds-classic-editor-import')}
+    }
     const query = window.matchMedia('(max-width: 700px)')
     const resize = () => setMobile(query.matches)
     resize(); query.addEventListener('change', resize)
@@ -86,7 +102,7 @@ export default function Main(props: MainProps) {
 
   return useObserver(() => (
     <EditorManagerProvider value={editorManager}>
-      <BotAccountProvider>
+      <BotAccountProvider initialMode={bridgeMode}>
       <PageHead
         title="LDS Studio"
         description="Discord message editor."
