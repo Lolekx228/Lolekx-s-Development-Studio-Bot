@@ -8,26 +8,33 @@ import { BackupManagerContext } from "../BackupManagerContext"
 export function BackupCreationControls() {
   const backupManager = useRequiredContext(BackupManagerContext)
 
-  const [backupName, setBackupName] = useState("")
+  const [editedName, setBackupName] = useState<string | null>(null)
+  const [status, setStatus] = useState("")
 
-  return useObserver(() => (
-    <InputField
+  return useObserver(() => {
+    const backupName = editedName ?? backupManager.activeName
+    return (
+    <><InputField
       id="backup-name"
       value={backupName}
       onChange={setBackupName}
       label="Backup name"
     >
       <PrimaryButton
-        disabled={backupName.length === 0}
+        disabled={backupName.trim().length === 0}
         onClick={async () => {
-          await backupManager.saveBackup(backupName.trim())
-          setBackupName("")
+          try {
+            await backupManager.saveBackup(backupName.trim())
+            setBackupName(null)
+            setStatus('Сохранено: ' + backupName.trim())
+          } catch(error) { setStatus((error as Error).message) }
         }}
       >
         {backupManager.backups.some(backup => backup.name === backupName.trim())
           ? "Overwrite"
           : "Save"}
       </PrimaryButton>
-    </InputField>
-  ))
+    </InputField><p role="status" aria-live="polite">{status}</p></>
+    )
+  })
 }

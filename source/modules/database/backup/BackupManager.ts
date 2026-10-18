@@ -12,11 +12,14 @@ import type { BackupData } from "./types/BackupData"
 import type { ExportData } from "./types/ExportData"
 import backupFormat from './format'
 
+const openedBackups = new WeakMap<EditorManagerLike, string>()
+
 export class BackupManager {
   private readonly databaseManager: DatabaseManager
   private readonly editorManager: EditorManagerLike
 
   @observable backups: BackupData[] = []
+  @observable activeName = ""
 
   constructor(
     databaseManager: DatabaseManager,
@@ -24,6 +27,7 @@ export class BackupManager {
   ) {
     this.databaseManager = databaseManager
     this.editorManager = editorManager
+    this.activeName = openedBackups.get(editorManager) || ""
 
     databaseManager.initialized
       .then(async () => {
@@ -72,6 +76,9 @@ export class BackupManager {
 
     if (!backup) return
 
+    this.activeName = backup.name
+    openedBackups.set(this.editorManager, backup.name)
+
     if (backup.messages.some(message => message.data.components?.length)) {
       sessionStorage.setItem('lds-v2-backup-import', JSON.stringify({version:8,backups:[backup]}))
       location.assign(process.env.NEXT_PUBLIC_BASE_PATH + '/components/')
@@ -92,6 +99,7 @@ export class BackupManager {
   }
 
   async saveBackup(backup: string | Backup) {
+    const fromEditor = typeof backup === "string"
     if (typeof backup === "string") {
       const id = await this.getId(backup)
 
@@ -124,6 +132,10 @@ export class BackupManager {
       .put(backup)
 
     await this.loadBackupList()
+    if (fromEditor) {
+      this.activeName = backup.name
+      openedBackups.set(this.editorManager, backup.name)
+    }
   }
 
   async deleteBackup(name: string) {

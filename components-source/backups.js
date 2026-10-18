@@ -1,19 +1,19 @@
 'use strict';
 const backupDialog=document.createElement('dialog');backupDialog.id='backupPicker';
 backupDialog.innerHTML='<h2>Импорт бекапов Discohook</h2><p>Выберите сообщение. Оно заменит текущий черновик.</p><label>Бекап<select id="backupChoice"></select></label><p id="backupWarning" class="hint"></p><div class="login-actions"><button id="openBackup" class="primary">Открыть сообщение</button><button id="cancelBackup">Отмена</button></div>';
-document.body.append(backupDialog);let importedMessages=[];
+document.body.append(backupDialog);let importedMessages=[],importedSelections=[];
 function selectBackupFile(value){
- const backups=LDSBackupFormat.parseModern(value);importedMessages=[];const select=document.getElementById('backupChoice');select.textContent='';
+ const backups=LDSBackupFormat.parseModern(value);importedMessages=[];importedSelections=[];const select=document.getElementById('backupChoice');select.textContent='';
  backups.forEach((backup,backupIndex)=>backup.messages.forEach((message,messageIndex)=>{
   const option=document.createElement('option');option.value=String(importedMessages.length);option.textContent=`${backupIndex+1}. ${backup.name}${backup.messages.length>1?' · сообщение '+(messageIndex+1):''} · ${LDSBackupFormat.isV2(message.data)?'Components V2':'Embeds / обычное сообщение'}`;
-  select.append(option);importedMessages.push(message.data);
+  select.append(option);importedMessages.push(message.data);importedSelections.push({backup:{...backup,id:value.backups[backupIndex].id},messageIndex});
  }));
  if(!importedMessages.length)throw Error('Файл не содержит сообщений.');
  select.onchange=()=>document.getElementById('backupWarning').textContent=LDSBackupFormat.mediaWarnings(importedMessages[Number(select.value)]).join(' ');
  select.onchange();backupDialog.showModal();
 }
 document.getElementById('openBackup').onclick=()=>{
- try{const payload=normalize(JSON.parse(JSON.stringify(importedMessages[Number(document.getElementById('backupChoice').value)])));apply(payload);rawMode=false;dirty=false;$('#visualTab').click();backupDialog.close();toast('Бекап открыт без удаления компонентов и вложений.')}catch(error){document.getElementById('backupWarning').textContent=error.message}
+ try{const selection=Number(document.getElementById('backupChoice').value);const payload=normalize(JSON.parse(JSON.stringify(importedMessages[selection])));apply(payload);window.dispatchEvent(new CustomEvent('lds-backup-opened',{detail:importedSelections[selection]}));rawMode=false;dirty=false;$('#visualTab').click();backupDialog.close();toast('Бекап открыт без удаления компонентов и вложений.')}catch(error){document.getElementById('backupWarning').textContent=error.message}
 };
 document.getElementById('cancelBackup').onclick=()=>backupDialog.close();
 $('#file').onchange=async event=>{
