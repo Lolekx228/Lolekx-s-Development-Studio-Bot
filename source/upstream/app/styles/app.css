@@ -1,0 +1,120 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+@font-face {
+  font-family: Whitney;
+  font-style: normal;
+  font-weight: 300;
+  src: url(/fonts/whitney-300.woff), url(/fonts/whitney-300.woff2);
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Whitney;
+  font-style: normal;
+  font-weight: 400;
+  src: url(/fonts/whitney-400.woff), url(/fonts/whitney-400.woff2);
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Whitney;
+  font-style: normal;
+  font-weight: 500;
+  src: url(/fonts/whitney-500.woff), url(/fonts/whitney-500.woff2);
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Whitney;
+  font-style: normal;
+  font-weight: 600;
+  src: url(/fonts/whitney-600.woff), url(/fonts/whitney-600.woff2);
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Whitney;
+  font-style: normal;
+  font-weight: 700;
+  src: url(/fonts/whitney-700.woff), url(/fonts/whitney-700.woff2);
+  font-display: swap;
+}
+
+.scrollbar-none {
+  /* Firefox */
+  scrollbar-width: none;
+  /* IE */
+  -ms-overflow-style: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  /* Chrome */
+  @apply w-0 h-0 bg-transparent;
+}
+
+/* Remove arrow icon - thanks https://stackoverflow.com/a/6202729 */
+details summary.marker-none::-webkit-details-marker {
+  display: none;
+}
+
+/* Scrollbars - thanks https://css-tricks.com/the-current-state-of-styling-scrollbars-in-css/ */
+:root {
+  @apply [scrollbar-color:#C5C9CD_#EBEDEF];
+}
+
+:root.dark {
+  @apply [scrollbar-color:#1A1B1E_#2B2D31];
+}
+
+:root::-webkit-scrollbar {
+  @apply w-[10px] h-[10px] rounded-full;
+}
+
+/* Foreground */
+:root::-webkit-scrollbar-thumb {
+  @apply bg-[#C5C9CD] dark:bg-[#1A1B1E] rounded-full;
+}
+
+/* Background */
+:root::-webkit-scrollbar-track {
+  @apply bg-[#EBEDEF] dark:bg-[#2B2D31] rounded-full;
+}
+
+/* Color picker */
+input[id^="rc-editable-input-"] {
+  @apply rounded border bg-gray-300 border-gray-200 !shadow-none focus:outline-none focus:border-blurple-500 dark:border-transparent dark:bg-[#292b2f] invalid:border-rose-400 dark:invalid:border-rose-400 transition !w-full;
+}
+
+label[for^="rc-editable-input-"] {
+  @apply dark:!text-primary-230;
+}
+
+.sketch-picker > .flexbox-fix:last-child {
+  @apply pt-3 mt-3 !border-t-gray-400 dark:!border-t-gray-600;
+}
+
+/* Base UI */
+/*
+  Select a portal "presentation" element (not exposed for styling in the
+  dialog API) which has a "dialog" future sibling (the dialog content).
+  This should avoid styling presentations for other types of popover
+  components from base-ui.
+*/
+div[data-base-ui-portal] > div[role="presentation"]:has(~ div[role="dialog"]) {
+  /*
+    Fix unclickable backdrops in nested modals due to the z-index of parent
+    backdrops which is high to compensate for the z-index of the header bar
+  */
+  @apply z-[30];
+}
+
+/*
+  Darken the background when a select sheet is active. Not sure if I can make
+  this transition since the element is not mounted until it's needed, so it's
+  disabled for now.
+*/
+/* div[data-base-ui-portal] > div[role="presentation"]:has(~ div.base-ui-select-positioner) {
+  @apply max-sm:bg-black/20 transition max-sm:z-[34];
+} */

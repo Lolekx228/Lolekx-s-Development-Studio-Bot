@@ -1,0 +1,14 @@
+{
+    "defaultPlaceholder": "Gör ett val",
+    "settings": "Inställningar",
+    "search": "Sök",
+    "helpSearchPlaceholder": "Hur gör jag …",
+    "logIn": "Logga in",
+    "logOut": "Logga ut",
+    "name": "Namn",
+    "backToSettings": "Tillbaka till inställningar",
+    "help": "Hjälp",
+    "share": "Dela",
+    "shareMessage": "Dela meddelande",
+    "addMessage": "Lägg till meddelande"
+}

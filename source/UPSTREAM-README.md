@@ -1,33 +1,94 @@
 # Discohook
 
-[![ci](https://github.com/discohook/site/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/discohook/site/actions/workflows/ci.yml)
+Simple, free, and highly versatile message designer for Discord webhooks.
 
-An easy-to-use tool for building and sending Discord messages and embeds using webhooks.
+## Feature comparison
 
-Live instance is available at <https://discohook.app/>.
+This is a complete rewrite of the [original Discohook project](https://github.com/discohook/site) by [@maddysrc](https://github.com/maddysrc), now under new ownership. [Read the full changelog](https://discohook.app/guide/changelogs/new-discohook).
 
-## Running via Container
+## Free?
 
-This application is setup to publish a container image to `ghcr.io/discohook/site:latest`. This image can be run with [podman](https://podman.io/), [docker](https://www.docker.com/), or another service compliant with the [OCI](https://opencontainers.org/). The image can be run from the command line with the following command or in the desktop guis ([podman desktop guide](https://podman-desktop.io/docs/working-with-containers/starting-a-container))
-```sh
-# Replace 'podman' with 'docker' if using that, the command is equivalent
-# Add --rm if you want the container to be removed automatically after being stopped
-# If necesary, change the second 3000 to change which port on the local computer the app is bound to
-podman run -d -p 3000:3000 ghcr.io/discohook/site:latest
-```
+Discohook is free, but you are encouraged to [donate and get extra perks](https://discohook.app/donate)!
 
-## Local build and run
+## Meta
 
-Requires Node.js 16 and the Yarn package manager installed
+This monorepo comes in a few main parts:
 
-```sh
-# Install dependencies
-yarn install
+- [site](/packages/site) - The Discohook website
+- [bot](/packages/bot) - Handles Discord interactions & proxied gateway events
+- [bot-ws](/packages/bot-ws) - Proxies gateway events to `bot`
+- [bouncer](/packages/bouncer) - Enables extended flow execution time for `bot`
+- [magic-backup-importer](/packages/magic-backup-importer) - Hosted on a domain where users may have local backups stored (`site` redirects here and vice versa)
+- [link](/packages/link) - Hosted on a subdomain or shorter domain, used for redirecting to `/link/...`
 
-# Run a development server
-yarn run dev
+Along with some shared packages:
 
-# Run a production server
-yarn run build
-yarn run start
-```
+- [store](/packages/store) - Database & KV utilities
+  - Upgrading? Make sure to check out this package's README for database migration notes.
+
+## Attribution
+
+### Translations
+
+| Thanks to              | Language(s)           | Progress |
+|------------------------|-----------------------|----------|
+| mew610                 | Arabic                | [![](https://translate.shay.cat/widget/discohook/-/ar/svg-badge.svg)](https://translate.shay.cat/engage/discohook/-/ar/)           |
+| anonymous              | Portuguese (Brazil)   | [![](https://translate.shay.cat/widget/discohook/-/pt_BR/svg-badge.svg)](https://translate.shay.cat/engage/discohook/-/pt_BR/)     |
+| mumu-oo                | Chinese (Traditional) | [![](https://translate.shay.cat/widget/discohook/-/zh_Hant/svg-badge.svg)](https://translate.shay.cat/engage/discohook/-/zh-Hant/) |
+| dustytheonly, Kamfkeks | German                | [![](https://translate.shay.cat/widget/discohook/-/de/svg-badge.svg)](https://translate.shay.cat/engage/discohook/-/de/)           |
+| Mathew Rozhdestvensky  | Russian               | [![](https://translate.shay.cat/widget/discohook/-/ru/svg-badge.svg)](https://translate.shay.cat/engage/discohook/-/ru/)           |
+| yaraej_                | Spanish               | [![](https://translate.shay.cat/widget/discohook/-/es/svg-badge.svg)](https://translate.shay.cat/engage/discohook/-/es/)           |
+| ilprofilodineko        | Italian               | [![](https://translate.shay.cat/widget/discohook/-/it/svg-badge.svg)](https://translate.shay.cat/engage/discohook/-/it/)           |
+| maddymeows             | Dutch                 | [![](https://translate.shay.cat/widget/discohook/-/nl/svg-badge.svg)](https://translate.shay.cat/engage/discohook/-/nl/)           |
+
+[... and more!](https://translate.shay.cat/projects/discohook/site/) (site translations must be at least 50% complete to be shown in this table)
+
+### Original Project
+
+Big thanks to [@maddysrc](https://github.com/maddysrc) and [@crawron](https://twitter.com/Crawron) for creating the original Discohook project in 2019 and later working with me to gracefully transfer ownership after 5 years.
+
+## Development
+
+### Prerequisites: bindings
+
+#### Hyperdrive (PostgreSQL)
+
+The `DATABASE_URL` secret should be defined when developing as a connection string for a local PostgreSQL database. The `bot` and `site` packages will fill `env.HYPERDRIVE` such that it can be used in the `getDb` utility.
+
+In production, this variable is not used. Instead, provide a connection string directly to the [Hyperdrive instance](https://developers.cloudflare.com/hyperdrive/) associated with the worker in wrangler.toml.
+
+#### KV (Redis)
+
+This project started out using Cloudflare KV, but it was exorbitantly expensive, so it now uses a self-hosted instance of [Valkey](https://valkey.io/) behind [Webdis](https://webd.is). In the `bot` and `site` packages, you will need to define a `REDIS_URL` secret that describes the credentials to your Webdis instance in a standard `redis://` URI format. See [Webdis's README](https://github.com/nicolasff/webdis#acl) on configuring access control.
+
+`env.KV` is made available as a `RedisKV` instance, which is a custom class designed to mimic the behavior of `KVNamespace`.
+
+### Contributing
+
+Before submitting your pull request, please remember to run `npx biome check .` to check for errors, then `yarn fix` to format. This repository uses [Biome](https://biomejs.dev), not ESLint/Prettier. You may also want to install the [Biome extension for your editor](https://biomejs.dev/guides/integrate-in-editor).
+
+As far as style preferences not covered by the [Biome configuration](/biome.json):
+
+- Use `n += 1` rather than `n++`
+- Prefer chaining schemas (`z.string().optional()`) over nesting (`z.optional(z.string())`)
+- Prefer Drizzle callbacks where possible (`(table, { eq }) => eq(table.id, id)`) over importing individual tables and functions
+
+### Bot
+
+Run `yarn dev:bot` to start a miniflare server for the "primary" portion of the bot. To expose the local server to the internet so that Discord can request it, use the `tunnel` script in the bot directory (requires cloudflared to be installed). Once you're done with that, copy your tunneled URL to your Discord application's "Interactions Endpoint URL" field.
+
+![interactions-endpoint](https://user-images.githubusercontent.com/534619/157510959-6cf0327a-052a-432c-855b-c662824f15ce.png)
+
+If you would also like to work on gateway event processing (the "response" logic for which is contained in the primary portion), you will need to run `yarn bot-ws` to start an instance of the gateway-connected bot. Be sure to define the required environment variables [as described in its README](/packages/bot-ws/README.md#setup). While testing, use the Ngrok URL from above as your `WORKER_ORIGIN` so that you can use the Ngrok web interface to replay events.
+
+### Site
+
+Run `yarn dev:site` to start a miniflare server for the site.
+
+If you want to develop `magic-backup-importer`, also run `yarn dev:backups` after [setting up its environment](/packages/magic-backup-importer/README.md#development). This will be hosted on http://localhost:8789 by default. To save a backup to the local database, uncomment the execution of the `saveBackup()` method in the index route's `useEffect` callback.
+
+## Deployment
+
+This project relies on [Durable Objects](https://developers.cloudflare.com/durable-objects/) for many core features, which is a product exclusive to accounts on the Workers Paid plan. If you do not want to subscribe to Workers Paid, you will have to remove these features in your fork.
+
+Or, if you don't want to do either of those, consider joining the [support server](https://discohook.app/discord) and letting me know what you want to see in the main instance.

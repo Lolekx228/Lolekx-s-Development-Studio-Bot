@@ -7,3 +7,6 @@ source/.yarn/install-state.gz
 .env
 .env.*
 !.env.example
+
+source/node_modules/
+source/.vite/

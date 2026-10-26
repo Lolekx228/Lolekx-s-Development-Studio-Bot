@@ -1,0 +1,542 @@
+import { Avatar } from "@base-ui/react/avatar";
+import { ButtonStyle } from "discord-api-types/v10";
+import type React from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Link } from "react-router";
+import { twJoin } from "tailwind-merge";
+import { apiUrl, BRoutes } from "~/api/routing";
+import { Button } from "~/components/Button";
+import { useError } from "~/components/Error";
+import { CoolIcon } from "~/components/icons/CoolIcon";
+import { linkClassName } from "~/components/preview/Markdown";
+import { TextInput } from "~/components/TextInput";
+import { loadMessageComponents } from "@lds/compat";
+import type {
+  LoadedBackup,
+  loader as MeBackupsLoader,
+} from "~/routes/me.backups";
+import type { User } from "~/session.server";
+import type { QueryData } from "~/types/QueryData";
+import { type QueryDataTarget, TargetType } from "~/types/QueryData-raw";
+import type { CacheManager } from "~/util/cache/CacheManager";
+import { WEBHOOK_URL_RE } from "~/util/constants";
+import { getWebhook } from "~/util/discord";
+import { DragType, useDragManager } from "~/util/drag";
+import { useSafeFetcher } from "~/util/loader";
+import type { action as ApiPostBackups } from "../api/v1/backups";
+import type { loader as ApiGetBackup } from "../api/v1/backups.$id";
+import { BackupEditModal } from "./BackupEditModal";
+import {
+  draftTargetToQueryTarget,
+  type DraftTargetWebhook,
+  getTargetKey,
+  type TargetKey,
+  type TargetMap,
+} from "./MessageSendModal";
+import { Modal, type ModalProps } from "./Modal";
+
+// Reset existing targets and add from the backup (if any)
+export const setTargets = async (
+  targets: TargetMap,
+  updateTargets: React.Dispatch<Partial<TargetMap>>,
+  newTargets: QueryDataTarget[] | undefined,
+  cache?: CacheManager,
+) => {
+  const keys = Object.keys(targets) as TargetKey[];
+  for (const key of keys) {
+    delete targets[key];
+  }
+  if (!newTargets || newTargets.length === 0) {
+    // state update
+    updateTargets({});
+    return;
+  }
+
+  const cachingGuildIds: string[] = [];
+  for (const target of newTargets) {
+    if (target.type && target.type !== TargetType.Webhook) continue;
+    const match = target.url.match(WEBHOOK_URL_RE);
+    if (!match) continue;
+
+    const webhook = await getWebhook(match[1], match[2]);
+    if (webhook.id) {
+      const target: DraftTargetWebhook = {
+        type: TargetType.Webhook,
+        webhook,
+      };
+      updateTargets({ [getTargetKey(target)]: target });
+    }
+    if (
+      webhook.guild_id &&
+      !cachingGuildIds.includes(webhook.guild_id) &&
+      cache
+    ) {
+      cachingGuildIds.push(webhook.guild_id);
+      cache
+        .fetchGuildCacheable(webhook.guild_id)
+        .then(() =>
+          console.log(
+            `Cached cacheables for ${webhook.guild_id} (webhook ID ${webhook.id})`,
+          ),
+        );
+    }
+  }
+};
+
+export const MessageBackupsModal = (
+  props: ModalProps & {
+    targets: TargetMap;
+    data: QueryData;
+    setBackupId: React.Dispatch<React.SetStateAction<bigint | undefined>>;
+    updateTargets: React.Dispatch<Partial<TargetMap>>;
+    setData: React.Dispatch<QueryData>;
+    user?: User | null;
+    cache?: CacheManager;
+    onBackupLoad?: () => void;
+  },
+) => {
+  const { t } = useTranslation();
+  const {
+    targets,
+    data,
+    setData,
+    updateTargets,
+    setBackupId,
+    user,
+    cache,
+    onBackupLoad = () => {},
+  } = props;
+  const [error, setError] = useError(t);
+  const drag = useDragManager();
+
+  const dataWithTargets = useMemo(
+    () =>
+      ({
+        ...data,
+        targets: Object.values(targets).map(draftTargetToQueryTarget),
+      }) satisfies QueryData,
+    [data, targets],
+  );
+
+  const [backups, setBackups] = useState<LoadedBackup[]>();
+  const meBackupsFetcher = useSafeFetcher<typeof MeBackupsLoader>({
+    onError: setError,
+  });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only when loader changes
+  useEffect(() => {
+    if (meBackupsFetcher.data && meBackupsFetcher.state === "idle") {
+      const current = [...(backups ?? [])];
+      const currentIds = current.map((b) => b.id);
+      current.push(
+        ...meBackupsFetcher.data.backups.filter(
+          (b) => !currentIds.includes(b.id),
+        ),
+      );
+      if (current.length !== backups?.length) {
+        setBackups(current);
+      }
+
+      if (meBackupsFetcher.data.backups.length === 50) {
+        // assume there are more pages (50 is max per page)
+        meBackupsFetcher.load(
+          `/me/backups?${new URLSearchParams({
+            _data: "routes/me.backups",
+            page: String(meBackupsFetcher.data.page + 1),
+          })}`,
+        );
+      }
+    }
+  }, [meBackupsFetcher]);
+
+  const [searchTerm, setSearchTerm] = useState<string>();
+  const [draftName, setDraftName] = useState<string>();
+  const backupFetcher = useSafeFetcher<
+    typeof ApiPostBackups | typeof ApiGetBackup
+  >({
+    onError: setError,
+  });
+
+  const backup: LoadedBackup | undefined = useMemo(() => {
+    if (backupFetcher.data) {
+      return backupFetcher.data;
+    }
+    if (backups && data.backup_id !== undefined) {
+      return backups.find((b) => String(b.id) === String(data.backup_id));
+    }
+  }, [backups, data.backup_id, backupFetcher.data]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only update on open change
+  useEffect(() => {
+    if (props.open && user && !backups && meBackupsFetcher.state === "idle") {
+      meBackupsFetcher.load("/me/backups");
+    }
+  }, [props.open]);
+
+  const [editingBackup, setEditingBackup] = useState(false);
+  return (
+    <Modal title={t("backups")} {...props} size="lg">
+      <BackupEditModal
+        open={editingBackup}
+        setOpen={setEditingBackup}
+        backup={backup}
+        onSave={(updated) => {
+          if (backup) {
+            backup.name = updated.name;
+            backup.nextRunAt = updated.nextRunAt;
+            backup.previewImageUrl = updated.previewImageUrl;
+            backup.scheduled = updated.scheduled;
+            backup.updatedAt = updated.updatedAt;
+            // update state without re-fetching
+            setBackups([...(backups ?? [])]);
+          }
+          setEditingBackup(false);
+        }}
+      />
+      {error}
+      {user ? (
+        <div>
+          <p className="-mt-2 mb-2">
+            <Link to="/me/backups" target="_blank" className={linkClassName}>
+              {t("manageBackups")}
+            </Link>
+          </p>
+          {backup || backupFetcher.state !== "idle" ? (
+            <div className="flex gap-1 items-center">
+              <div className="rounded-lg border border-border-normal dark:border-border-normal-dark shadow bg-gray-200 dark:bg-gray-800 py-3 px-4 flex gap-x-4 grow">
+                <Avatar.Root>
+                  {backup?.previewImageUrl ? (
+                    <Avatar.Image
+                      src={backup.previewImageUrl}
+                      className="object-cover w-9 my-auto rounded aspect-square shrink-0"
+                    />
+                  ) : null}
+                  <Avatar.Fallback className="w-9 h-9 my-auto flex rounded bg-blurple shrink-0">
+                    <CoolIcon
+                      icon="File_Document"
+                      className="m-auto text-2xl"
+                    />
+                  </Avatar.Fallback>
+                </Avatar.Root>
+                <div className="my-auto">
+                  {backup ? (
+                    <div className="flex max-w-full truncate">
+                      <p className="font-semibold truncate">{backup.name}</p>
+                      <button
+                        type="button"
+                        className="ms-2 my-auto"
+                        onClick={() => setEditingBackup(true)}
+                      >
+                        <CoolIcon icon="Edit_Pencil_01" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="h-5 rounded-full bg-gray-400 dark:bg-gray-600 w-1/5 mt-px" />
+                  )}
+                  <p className="text-sm text-muted dark:text-muted-dark leading-none">
+                    {t("savedAutomatically")}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col items-center gap-1">
+                <Button
+                  className="h-[1.8rem] w-full"
+                  disabled={!backup || backupFetcher.state !== "idle"}
+                  discordstyle={ButtonStyle.Success}
+                  onClick={() => {
+                    if (backup) {
+                      backupFetcher.submit(
+                        { data: dataWithTargets },
+                        {
+                          action: apiUrl(BRoutes.backups(backup.id)),
+                          method: "PATCH",
+                        },
+                      );
+                    }
+                  }}
+                >
+                  {t("save")}
+                </Button>
+                <Button
+                  className="h-[1.8rem] w-full"
+                  disabled={!backup}
+                  discordstyle={ButtonStyle.Secondary}
+                  onClick={() => {
+                    if (backup) {
+                      setData({ ...data, backup_id: undefined });
+                      setBackupId(undefined);
+                      backupFetcher.reset();
+                    }
+                  }}
+                >
+                  {t("unlink")}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex">
+              <div className="grow">
+                <TextInput
+                  label={t("searchOrCreateBackup")}
+                  className="w-full"
+                  maxLength={100}
+                  value={draftName ?? ""}
+                  onChange={(e) => {
+                    setDraftName(e.currentTarget.value);
+                    setSearchTerm(e.currentTarget.value);
+                  }}
+                />
+              </div>
+              <Button
+                className="mt-auto ms-2 h-9"
+                disabled={!draftName?.trim()}
+                onClick={async () => {
+                  setSearchTerm(undefined);
+
+                  const created = await backupFetcher.submitAsync(
+                    {
+                      name:
+                        draftName?.trim() || new Date().toLocaleDateString(),
+                      data: dataWithTargets,
+                    },
+                    {
+                      action: apiUrl(BRoutes.backups()),
+                      method: "POST",
+                    },
+                  );
+                  document.title = `${created.name} - Discohook`;
+                  setData({ ...data, backup_id: String(created.id) });
+                  setBackupId(BigInt(created.id));
+                  onBackupLoad();
+
+                  if (!backups) {
+                    setBackups([created]);
+                  } else if (!backups.find((b) => b.id === created.id)) {
+                    setBackups([...backups, created]);
+                  }
+                }}
+              >
+                {t("createBackup")}
+              </Button>
+            </div>
+          )}
+          {backup ? (
+            <div className="grow mt-4">
+              <TextInput
+                label={t("search")}
+                className="w-full"
+                maxLength={100}
+                value={searchTerm ?? ""}
+                onChange={(e) => setSearchTerm(e.currentTarget.value)}
+              />
+            </div>
+          ) : null}
+          <div
+            className={twJoin(
+              "space-y-1.5 mt-2 overflow-y-auto max-h-96",
+              backups ? undefined : "animate-pulse",
+            )}
+          >
+            {backups
+              ? backups
+                  .filter((b) =>
+                    searchTerm
+                      ? b.name.toLowerCase().includes(searchTerm.toLowerCase())
+                      : true,
+                  )
+                  .map((b) => {
+                    const key = `backup-${b.id}`;
+                    return (
+                      // biome-ignore lint/a11y/noStaticElementInteractions: can't wrap all of this in a button
+                      <div
+                        key={key}
+                        className={twJoin(
+                          "rounded-lg border border-border-normal dark:border-border-normal-dark bg-gray-200 dark:bg-gray-800 p-3 flex transition relative",
+                          b.id.toString() === data.backup_id
+                            ? "opacity-60 pointer-events-none"
+                            : undefined,
+                          drag.active ? "cursor-grabbing" : undefined,
+                        )}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          drag.setFocusKey(key);
+                        }}
+                        onDragExit={() => drag.setFocusKey(undefined)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          drag.onDrop?.(b.id.toString(), {});
+                        }}
+                      >
+                        <button
+                          type="button"
+                          // draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.effectAllowed = "move";
+                            drag.start(DragType.Backup, {
+                              onDrop(scopeId, _args) {
+                                // dropped onto itself, ignore
+                                if (scopeId === b.id.toString()) return;
+                              },
+                            });
+                          }}
+                          onDragEnd={() => drag.end()}
+                          // cursor-grab active:cursor-grabbing
+                          className="cursor-default me-2 my-auto"
+                        >
+                          <Avatar.Root>
+                            {b.previewImageUrl ? (
+                              <Avatar.Image
+                                src={b.previewImageUrl}
+                                className="object-cover size-7 rounded aspect-square"
+                              />
+                            ) : null}
+                            <Avatar.Fallback className="size-7 flex rounded bg-blurple">
+                              <CoolIcon
+                                icon="File_Document"
+                                className="m-auto text-lg text-gray-50"
+                              />
+                            </Avatar.Fallback>
+                          </Avatar.Root>
+                        </button>
+                        <p className="truncate my-auto">{b.name}</p>
+                        <div className="ms-auto flex space-x-1.5 rtl:space-x-reverse text-xl my-auto">
+                          <button
+                            type="button"
+                            title={t("openBackupLoad")}
+                            onClick={async () => {
+                              // Save current backup before opening a new one
+                              if (backup) {
+                                await backupFetcher.submitAsync(
+                                  { data: dataWithTargets },
+                                  {
+                                    action: apiUrl(BRoutes.backups(backup.id)),
+                                    method: "PATCH",
+                                  },
+                                );
+                              }
+                              const loadedBackup =
+                                await backupFetcher.loadAsync(
+                                  `${apiUrl(BRoutes.backups(b.id))}?data=true`,
+                                );
+                              // Always true, this is just a type guard
+                              if ("data" in loadedBackup && loadedBackup.data) {
+                                document.title = `${b.name} - Discohook`;
+                                setData({
+                                  ...loadedBackup.data,
+                                  // Just in case
+                                  backup_id: b.id.toString(),
+                                });
+                                setTargets(
+                                  targets,
+                                  updateTargets,
+                                  loadedBackup.data.targets,
+                                  cache,
+                                );
+                                loadMessageComponents(
+                                  loadedBackup.data,
+                                  setData,
+                                );
+                                setBackupId(b.id);
+                                onBackupLoad();
+                              }
+                            }}
+                          >
+                            <CoolIcon icon="File_Edit" />
+                          </button>
+                          <button
+                            type="button"
+                            title={t("openBackupClone")}
+                            onClick={async () => {
+                              if (backup) {
+                                await backupFetcher.submitAsync(
+                                  { data: dataWithTargets },
+                                  {
+                                    action: apiUrl(BRoutes.backups(backup.id)),
+                                    method: "PATCH",
+                                  },
+                                );
+                              }
+                              const loadedBackup =
+                                await backupFetcher.loadAsync(
+                                  `${apiUrl(BRoutes.backups(b.id))}?data=true`,
+                                );
+                              // Always true, this is just a type guard
+                              if ("data" in loadedBackup && loadedBackup.data) {
+                                const created = await backupFetcher.submitAsync(
+                                  {
+                                    name: `Copy of ${b.name}`.slice(0, 100),
+                                    data: loadedBackup.data,
+                                  },
+                                  {
+                                    action: apiUrl(BRoutes.backups()),
+                                    method: "POST",
+                                  },
+                                );
+                                document.title = `${created.name} - Discohook`;
+                                setData({
+                                  ...loadedBackup.data,
+                                  backup_id: created.id.toString(),
+                                });
+                                // This isn't totally necessary for a duplicated backup
+                                setTargets(
+                                  targets,
+                                  updateTargets,
+                                  loadedBackup.data.targets,
+                                  cache,
+                                );
+                                loadMessageComponents(
+                                  loadedBackup.data,
+                                  setData,
+                                );
+                                setBackupId(created.id);
+                                onBackupLoad();
+                              }
+                            }}
+                          >
+                            <CoolIcon icon="Copy" />
+                          </button>
+                          <Link
+                            to={`/?backup=${b.id}`}
+                            title={t("openBackupNewTab")}
+                            target="_blank"
+                          >
+                            <CoolIcon icon="External_Link" />
+                          </Link>
+                        </div>
+                        <div
+                          className={twJoin(
+                            "absolute box-border border-2 border-green-500 rounded-lg size-full transition-opacity inset-0",
+                            drag.isFocused(key)
+                              ? undefined
+                              : "opacity-0 pointer-events-none",
+                          )}
+                        />
+                      </div>
+                    );
+                  })
+              : Array(10)
+                  .fill(undefined)
+                  .map((_, i) => (
+                    <div
+                      key={`backup-skeleton-${i}`}
+                      className="rounded-lg border border-border-normal dark:border-border-normal-dark bg-gray-200 dark:bg-gray-800 p-2 flex transition gap-2"
+                    >
+                      <div className="w-7 h-7 my-auto flex rounded bg-blurple">
+                        <CoolIcon
+                          icon="File_Document"
+                          className="m-auto text-lg text-gray-50"
+                        />
+                      </div>
+                      <div className="my-auto rounded-full h-4 w-36 bg-gray-300 dark:bg-gray-600" />
+                    </div>
+                  ))}
+          </div>
+        </div>
+      ) : (
+        <Link to="/auth/discord" target="_blank" className={linkClassName}>
+          {t("logInToSaveBackups")}
+        </Link>
+      )}
+    </Modal>
+  );
+};

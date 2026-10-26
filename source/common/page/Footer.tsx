@@ -1,4 +1,0 @@
-import React from 'react'
-import styled from 'styled-components'
-const Container=styled.footer`margin:16px;padding:48px 0; border-top:1px solid ${({theme})=>theme.backgroundModifier.accent};font-size:13px;line-height:1.5;`
-export function Footer(){return <Container><strong>LDS Studio · Classic</strong><p>Редактор сообщений Discord.</p><p><a href="https://github.com/Lolekx228/Lolekx-s-Development-Studio-Bot" target="_blank" rel="noopener noreferrer">Source Code</a> · <a href={process.env.NEXT_PUBLIC_BASE_PATH + '/THIRD-PARTY-NOTICES.txt'} target="_blank" rel="noopener noreferrer">Авторство и изменения</a> · <a href={process.env.NEXT_PUBLIC_BASE_PATH + '/LICENSE.txt'} target="_blank" rel="noopener noreferrer">GNU AGPL v3</a></p><small>Свободное ПО, предоставляется без гарантий. Не связано с Discord.</small></Container>}

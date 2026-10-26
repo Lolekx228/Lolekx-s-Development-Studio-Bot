@@ -1,0 +1,108 @@
+import { useEffect, useState } from "react";
+import type { LocaleCode } from "~/i18n";
+
+interface FilehostConfigurationBase {
+  position?: number;
+}
+
+export interface Settings {
+  theme?: "light" | "dark" | "sync";
+  messageDisplay?: "cozy" | "compact";
+  webhookInput?: "modern" | "classic";
+  compactAvatars?: boolean;
+  skinTone?: 0 | 1 | 2 | 3 | 4;
+  forceDualPane?: boolean;
+  locale?: LocaleCode;
+  defaultMessageFlag?: "standard" | "components";
+  autoPickFilehost?: boolean;
+  filehosts?: Partial<{
+    catbox: FilehostConfigurationBase & {
+      cookie: boolean;
+    };
+    imgbb: FilehostConfigurationBase & {
+      cookie?: boolean;
+      access_token?: string;
+    };
+    sxcu: FilehostConfigurationBase & {
+      domain?: string;
+      token?: string;
+    };
+    postimages: FilehostConfigurationBase;
+  }>;
+  // for spanish users whose ISP decides they shouldn't be able to access part
+  // of the internet because soccer is on - https://hayahora.futbol
+  hideBlockageWarning?: boolean;
+
+  developer?: boolean;
+  experiments?: (typeof EXPERIMENTS)[number][];
+}
+
+export const useLocalStorage = <T = Settings>(
+  key = "lds-app-settings",
+): [T, (data: Partial<T>) => void] => {
+  try {
+    localStorage;
+  } catch {
+    return [{} as T, (_data: Partial<T>) => {}];
+  }
+
+  const settings = JSON.parse(localStorage.getItem(key) ?? "{}");
+  // biome-ignore lint/correctness/useHookAtTopLevel: server/client case
+  const [state, setState] = useState(settings as T);
+  // biome-ignore lint/correctness/useHookAtTopLevel: ^
+  useEffect(() => {
+    const eventKey = `storage_${key}`;
+    const listenStorageChange = () => {
+      setState(JSON.parse(localStorage.getItem(key) ?? "{}"));
+    };
+    window.addEventListener(eventKey, listenStorageChange);
+    return () => window.removeEventListener(eventKey, listenStorageChange);
+  }, [key]);
+
+  const update = (data: Partial<T>) => {
+    const newData = { ...settings, ...data };
+    localStorage.setItem(key, JSON.stringify(newData));
+    window.dispatchEvent(new Event(`storage_${key}`));
+  };
+
+  return [state, update];
+};
+
+export const EXPERIMENTS = [
+  {
+    id: "MORE_TARGETS",
+    date: "2026-04-15",
+    description: 'Create more types of targets in the "Add Webhook" menu',
+  },
+  {
+    id: "SAVE_ATTACHMENTS",
+    date: "2026-04-16",
+    description:
+      "Upload attachments to a media channel and re-use them in backups",
+  },
+] as const;
+
+export type EXPERIMENT_ID = (typeof EXPERIMENTS)[number]["id"];
+
+export const experimentEnabled = (
+  experimentId: EXPERIMENT_ID,
+  settings?: Pick<Settings, "experiments">,
+): boolean => {
+  if (settings) {
+    return (
+      settings.experiments?.find((e) => e.id === experimentId) !== undefined
+    );
+  }
+  try {
+    const settings = JSON.parse(
+      localStorage.getItem("lds-app-settings") ?? "{}",
+    );
+    return (
+      (settings.experiments as { id: string }[])?.find(
+        (e) => e.id === experimentId,
+      ) !== undefined
+    );
+  } catch {
+    return false;
+  }
+};

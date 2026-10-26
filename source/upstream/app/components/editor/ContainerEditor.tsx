@@ -1,0 +1,356 @@
+import { Collapsible } from "@base-ui/react/collapsible";
+import {
+  type APIContainerComponent,
+  ComponentType,
+} from "discord-api-types/v10";
+import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import { twJoin } from "tailwind-merge";
+import type { ComponentFoundBackupHook } from "~/api/v1/components.$id.backups";
+import type { EditingComponentData } from "~/modals/ComponentEditModal";
+import { type DraftFile, getQdMessageId } from "@lds/compat";
+import type { APIMessageTopLevelComponent, QueryData } from "~/types/QueryData";
+import type { CacheManager } from "~/util/cache/CacheManager";
+import { MAX_TOTAL_COMPONENTS } from "~/util/constants";
+import type { DragManager } from "~/util/drag";
+import { ButtonSelect } from "../ButtonSelect";
+import { Checkbox } from "../Checkbox";
+import { collapsibleStyles } from "../collapsible";
+import type { CoolIconsGlyph } from "../icons/CoolIcon";
+import { InfoBox } from "../InfoBox";
+import { ColorPickerPopoverWithTrigger } from "../pickers/ColorPickerPopover";
+import { ActionRowEditor } from "./ActionRowEditor";
+import { decimalToHex } from "./ColorPicker";
+import { DragArea } from "./DragArea";
+import { FileEditor, FileEditorDud } from "./FileEditor";
+import { MediaGalleryEditor } from "./MediaGalleryEditor";
+import { SectionEditor } from "./SectionEditor";
+import { SeparatorEditor } from "./SeparatorEditor";
+import { TextDisplayEditor } from "./TextDisplayEditor";
+import {
+  getComponentErrors,
+  type TopLevelComponentEditorContainerProps,
+  TopLevelComponentEditorContainerSummary,
+} from "./TopLevelComponentEditor";
+
+export const AutoTopLevelComponentEditor = (
+  props: Omit<TopLevelComponentEditorContainerProps, "t"> & {
+    component: APIMessageTopLevelComponent;
+    setEditingComponent: React.Dispatch<
+      React.SetStateAction<EditingComponentData | undefined>
+    >;
+    files: DraftFile[];
+    setFiles?: React.Dispatch<React.SetStateAction<DraftFile[]>>;
+    componentFoundBackupsHook: ComponentFoundBackupHook;
+    cache: CacheManager | undefined;
+    drag?: DragManager;
+    cdn?: string;
+    interactiveComponents?: boolean;
+  },
+) => {
+  const { component, setEditingComponent, files, setFiles, cdn, ...rest } =
+    props;
+  switch (component.type) {
+    case ComponentType.ActionRow:
+      return (
+        <ActionRowEditor
+          {...rest}
+          component={component}
+          setEditingComponent={setEditingComponent}
+        />
+      );
+    case ComponentType.Container:
+      return (
+        <ContainerEditor
+          // all props; containers render AutoTopLevelComponentEditor as child
+          {...props}
+          component={component}
+        />
+      );
+    case ComponentType.Section:
+      return (
+        <SectionEditor
+          {...rest}
+          component={component}
+          setEditingComponent={setEditingComponent}
+          files={files}
+          setFiles={setFiles}
+          cdn={cdn}
+        />
+      );
+    case ComponentType.TextDisplay:
+      return <TextDisplayEditor {...rest} component={component} />;
+    case ComponentType.MediaGallery:
+      return (
+        <MediaGalleryEditor
+          {...rest}
+          component={component}
+          files={files}
+          setFiles={setFiles}
+          cdn={cdn}
+        />
+      );
+    case ComponentType.Separator:
+      return <SeparatorEditor {...rest} component={component} />;
+    case ComponentType.File:
+      return setFiles ? (
+        <FileEditor
+          {...rest}
+          component={component}
+          files={files}
+          setFiles={setFiles}
+        />
+      ) : (
+        <FileEditorDud {...rest} component={component} files={files} />
+      );
+    default:
+      // always return an Element for type consistency
+      return <></>;
+  }
+};
+
+export const ContainerEditor: React.FC<{
+  message: QueryData["messages"][number];
+  component: APIContainerComponent;
+  parent: APIContainerComponent | undefined;
+  index: number;
+  data: QueryData;
+  setData: React.Dispatch<QueryData>;
+  cache: CacheManager | undefined;
+  cdn?: string;
+  open?: boolean;
+  setEditingComponent: React.Dispatch<
+    React.SetStateAction<EditingComponentData | undefined>
+  >;
+  componentFoundBackupsHook: ComponentFoundBackupHook;
+  files: DraftFile[];
+  setFiles?: React.Dispatch<React.SetStateAction<DraftFile[]>>;
+  drag?: DragManager;
+  interactiveComponents?: boolean;
+  actionsBar?: Partial<
+    Record<"up" | "down" | "copy" | "delete", (() => void) | null>
+  >;
+  allowedChildrenTypes?: ComponentType[];
+}> = (props) => {
+  const {
+    message,
+    component: container,
+    parent,
+    index: i,
+    data,
+    setData,
+    drag,
+    open,
+    interactiveComponents,
+    actionsBar,
+    allowedChildrenTypes,
+  } = props;
+
+  const { t } = useTranslation();
+  const mid = getQdMessageId(message);
+  const errors = getComponentErrors(container);
+
+  const allComponentsCount =
+    message.data.components
+      ?.map((c) => 1 + ("components" in c ? c.components.length : 0))
+      .reduce((a, b) => a + b, 0) ?? 0;
+
+  const addChildOptions = useMemo(() => {
+    const options: {
+      label: string;
+      icon: CoolIconsGlyph;
+      value: ComponentType;
+    }[] = [
+      {
+        label: t("content"),
+        icon: "Text",
+        value: ComponentType.TextDisplay,
+      },
+      {
+        label: t("component.12"),
+        icon: "Image_01",
+        value: ComponentType.MediaGallery,
+      },
+      {
+        label: t("file"),
+        icon: "File_Blank",
+        value: ComponentType.File,
+      },
+      {
+        label: t("component.14"),
+        icon: "Line_L",
+        value: ComponentType.Separator,
+      },
+      {
+        label: t("component.1"),
+        icon: "Rows",
+        value: ComponentType.ActionRow,
+      },
+    ];
+    const types = allowedChildrenTypes ?? [
+      ComponentType.TextDisplay,
+      ComponentType.MediaGallery,
+      ComponentType.File,
+      ComponentType.Separator,
+      ComponentType.ActionRow,
+    ];
+    return options.filter((o) => types.includes(o.value));
+  }, [allowedChildrenTypes, t]);
+
+  return (
+    <Collapsible.Root
+      className={twJoin(
+        "group/top-2 relative overflow-hidden rounded-lg border border-gray-300 bg-gray-100 py-2 pe-2 ps-3 shadow transition-[border-color,border-width] dark:border-gray-700 dark:bg-gray-800",
+        container.accent_color != null
+          ? "before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-[--accent-color] before:content-['']"
+          : undefined,
+      )}
+      style={{
+        // @ts-expect-error
+        "--accent-color":
+          container.accent_color != null
+            ? decimalToHex(container.accent_color)
+            : "",
+      }}
+      defaultOpen={open}
+    >
+      <TopLevelComponentEditorContainerSummary
+        t={t}
+        component={container}
+        message={message}
+        parent={parent}
+        index={i}
+        data={data}
+        setData={setData}
+        className={twJoin(
+          "rounded-lg bg-gray-100 dark:bg-gray-800 transition-all pe-2",
+          "-m-2 group-data-[open]/top-2:mb-0",
+          "group-data-[open]/top-2:rounded-b-none",
+          "group-data-[open]/top-2:border-b border-gray-300 dark:border-gray-700",
+        )}
+        triggerClassName="p-2 ps-4"
+        drag={drag}
+        groupNestLevel={2}
+        actionsBar={actionsBar}
+      />
+      <Collapsible.Panel className={collapsibleStyles.editorPanel}>
+        {errors.length > 0 && (
+          <InfoBox severity="red" icon="Circle_Warning">
+            {errors.map((k) => t(k)).join("\n")}
+          </InfoBox>
+        )}
+        <div className="grid gap-2 mt-2 pl-2">
+          <div>
+            <Checkbox
+              label={t("markSpoiler")}
+              checked={container.spoiler ?? false}
+              onCheckedChange={(checked) => {
+                container.spoiler = checked;
+                setData({ ...data });
+              }}
+            />
+          </div>
+          <ColorPickerPopoverWithTrigger
+            t={t}
+            value={container.accent_color}
+            onValueChange={(color) => {
+              container.accent_color = color ?? null;
+              setData({ ...data });
+            }}
+          />
+        </div>
+        <div className="mt-2 space-y-2">
+          {container.components.map((child, ci) => {
+            const key = `message-${mid}-container-${i}-child-${ci}`;
+            return (
+              // biome-ignore lint/a11y/noStaticElementInteractions: we can't nest all this in a button
+              <div
+                key={key}
+                className="relative"
+                onDragOver={() => drag?.setFocusKey(key)}
+                onDragExit={() => drag?.setFocusKey(undefined)}
+              >
+                <AutoTopLevelComponentEditor
+                  {...props}
+                  parent={container}
+                  index={ci}
+                  component={child}
+                  interactiveComponents={interactiveComponents}
+                />
+                <DragArea
+                  visible={drag?.isFocused(key) ?? false}
+                  position={
+                    !drag?.data || !drag.data.parentType
+                      ? "bottom"
+                      : i < drag.data.index
+                        ? "top"
+                        : "bottom"
+                  }
+                  onDrop={() => {
+                    drag?.end();
+                    drag?.onDrop?.(mid, { path: [i, ci] });
+                  }}
+                />
+              </div>
+            );
+          })}
+          <div className="flex ms-2">
+            <div>
+              <ButtonSelect
+                disabled={allComponentsCount >= MAX_TOTAL_COMPONENTS}
+                options={addChildOptions}
+                onValueChange={(value) => {
+                  switch (value) {
+                    case ComponentType.TextDisplay: {
+                      container.components.push({
+                        type: ComponentType.TextDisplay,
+                        content: "",
+                      });
+                      setData({ ...data });
+                      break;
+                    }
+                    case ComponentType.File: {
+                      container.components.push({
+                        type: ComponentType.File,
+                        file: { url: "" },
+                      });
+                      setData({ ...data });
+                      break;
+                    }
+                    case ComponentType.MediaGallery: {
+                      container.components.push({
+                        type: ComponentType.MediaGallery,
+                        items: [],
+                      });
+                      setData({ ...data });
+                      break;
+                    }
+                    case ComponentType.Separator: {
+                      container.components.push({
+                        type: ComponentType.Separator,
+                      });
+                      setData({ ...data });
+                      break;
+                    }
+                    case ComponentType.ActionRow: {
+                      container.components.push({
+                        type: ComponentType.ActionRow,
+                        components: [],
+                      });
+                      setData({ ...data });
+                      break;
+                    }
+                    default:
+                      break;
+                  }
+                }}
+              >
+                {t("add")}
+              </ButtonSelect>
+            </div>
+          </div>
+        </div>
+      </Collapsible.Panel>
+    </Collapsible.Root>
+  );
+};

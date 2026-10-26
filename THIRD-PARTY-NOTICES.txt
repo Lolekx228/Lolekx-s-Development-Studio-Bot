@@ -1,18 +1,16 @@
-LDS Studio Classic is a modified copy of Discohook (classic).
-Original: https://github.com/discohook/site
-Upstream commit: 37388d8a013caa5c53e391e60d9776170d96d92f
-Copyright © 2025 The Discohook Authors.
-License: GNU Affero General Public License v3 or later (see LICENSE.txt).
-Modified 2026-10-14: LDS branding, bot API delivery, GitHub Pages static export, local sharing, Components V2 companion editor, Node compatibility.
-Source of modified version: https://github.com/Lolekx228/Lolekx-s-Development-Studio-Bot
-Provided without warranty. Not affiliated with Discohook or Discord.
-Modified 2026-10-15: Discord OAuth login with owner allowlist, browser-bound handoff and draft preservation.
-Modified 2026-10-15: backup version 8 compatibility, lossless component routing, JSON-paste import, header account controls and per-tab session restoration.
+LDS Studio uses and modifies the open-source Discohook.app editor.
+Upstream: https://github.com/discohook/discohook
+Authors and contributors: The Discohook Authors; see upstream history and source headers.
+License: GNU Affero General Public License, version 3 or later.
+The full license is supplied in LICENSE. Upstream revision is in source/UPSTREAM-COMMIT.txt.
+The source of this modified version is distributed under source/ with the site.
 
-Modified 2026-10-18: Components companion shell aligned with classic editor layout, shared backup library, local message sharing, accordion blocks and mobile pane tabs. Companion sources: components-source/.
+Discohook's preview Markdown includes work from https://github.com/discohook/site;
+its upstream attribution comments have been preserved.
 
-Modified 2026-10-18: remember opened backups, explicit overwrite control and preservation of other messages and backup metadata.
+Modifications: GitHub Pages SPA build; LDS branding; local draft, backup and history
+storage; existing LDS Discord OAuth and bot API delivery; direct webhook delivery;
+local component identifiers instead of registering components with Discohook servers.
 
-Modified 2026-10-18: dual delivery modes, bot message loading/editing, multipart uploads, attachment retention and forum posts. Discord API documentation referenced in ОБА-СПОСОБА-ОТПРАВКИ.txt.
-
-Modified 2026-10-18: original Discohook embed editing forms used for all classic messages, including action rows; lossless editor bridge and mixed-backup overwrite preservation. Original embed editing components remain unchanged.
+Bundled runtime packages retain their own licenses in source/package-lock.json
+and their upstream distributions. No endorsement by Discohook or Discord is implied.

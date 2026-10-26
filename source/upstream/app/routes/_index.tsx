@@ -1,0 +1,1757 @@
+import { Avatar } from "@base-ui/react/avatar";
+import { Dialog } from "@base-ui/react/dialog";
+import { isLinkButton } from "discord-api-types/utils/v10";
+import {
+  ButtonStyle,
+  ComponentType,
+  MessageFlags,
+} from "discord-api-types/v10";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
+import { Trans, useTranslation } from "react-i18next";
+import { Link, useLoaderData, useSearchParams } from "react-router";
+import { twJoin, twMerge } from "tailwind-merge";
+import { UAParser } from "ua-parser-js";
+import type { SafeParseError, SafeParseReturnType, ZodError } from "zod/v3";
+import { apiUrl, BRoutes } from "~/api/routing";
+import type { InvalidShareIdData } from "~/api/v1/share.$shareId";
+import type { ApiGetCurrentUser } from "~/api/v1/users.@me";
+import { Button } from "~/components/Button";
+import { ButtonSelect } from "~/components/ButtonSelect";
+import { MessageEditor } from "~/components/editor/MessageEditor.client";
+import { useError } from "~/components/Error";
+import { Header } from "~/components/Header";
+import { PostChannelIcon } from "~/components/icons/channel";
+import { CoolIcon } from "~/components/icons/CoolIcon";
+import { FluxerLogo, Logo } from "~/components/icons/Logo";
+import { InfoBox } from "~/components/InfoBox";
+import { linkClassName } from "~/components/preview/Markdown";
+import { Message } from "~/components/preview/Message.client";
+import { RadioishBox } from "~/components/Radio";
+import { TextInput } from "~/components/TextInput";
+import { AuthFailureModal } from "~/modals/AuthFaillureModal";
+import { AuthSuccessModal } from "~/modals/AuthSuccessModal";
+import {
+  CodeGeneratorModal,
+  type CodeGeneratorProps,
+} from "~/modals/CodeGeneratorModal";
+import {
+  ComponentEditModal,
+  type EditingComponentData,
+} from "~/modals/ComponentEditModal";
+import { useConfirmModal } from "~/modals/ConfirmModal";
+import { HistoryModal } from "~/modals/HistoryModal";
+import { ImageModal, type ImageModalProps } from "~/modals/ImageModal";
+import {
+  InvalidDataModal,
+  type InvalidDataModalProps,
+} from "~/modals/InvalidDataModal";
+import {
+  JsonEditorModal,
+  type JsonEditorProps,
+} from "~/modals/JsonEditorModal";
+import { MessageAllowedMentionsModal } from "~/modals/MessageAllowedMentionsModal";
+import { MessageBackupsModal, setTargets } from "~/modals/MessageBackupsModal";
+import { MessageFlagsEditModal } from "~/modals/MessageFlagsEditModal";
+import {
+  type DraftTargetFluxerWebhook,
+  type DraftTargetWebhook,
+  getTargetKey,
+  MessageSendModal,
+  type TargetKey,
+  type TargetMap,
+  useMessageSubmissionManager,
+} from "~/modals/MessageSendModal";
+import { MessageSendModeModal } from "~/modals/MessageSendModeModal";
+import { MessageSetModal } from "~/modals/MessageSetModal";
+import { MessageShareModal } from "~/modals/MessageShareModal";
+import { DialogPortal, ModalFooter } from "~/modals/Modal";
+import { ShareExpiredModal } from "~/modals/ShareExpiredModal";
+import { SimpleTextModal } from "~/modals/SimpleTextModal";
+import { getGenericTargetInfo, TargetAddModal } from "~/modals/TargetAddModal";
+import { TargetEditModal } from "~/modals/WebhookEditModal";
+import type { loader as MeBackupsLoader } from "~/routes/me.backups";
+import { getSessionStorage, getUserId } from "~/session.server";
+import {
+  type APIComponentInMessageActionRow,
+  type QueryData,
+  ZodQueryData,
+} from "~/types/QueryData";
+import {
+  type QueryDataMessageDataRaw,
+  type QueryDataTarget,
+  TargetType,
+} from "~/types/QueryData-raw";
+import { useCache } from "~/util/cache/CacheManager";
+import {
+  FLUXER_WEBHOOK_URL_RE,
+  INDEX_FAILURE_MESSAGE,
+  INDEX_MESSAGE,
+  WEBHOOK_URL_RE,
+} from "~/util/constants";
+import {
+  convertMessageToComponents,
+  DISCORD_API,
+  DISCORD_API_V,
+  extractComponentsByType,
+  extractInteractiveComponents,
+  getWebhook,
+} from "~/util/discord";
+import { useDragManager } from "~/util/drag";
+import { ATTACHMENT_URI_EXTENSIONS } from "~/util/files";
+import { getFluxerWebhook } from "~/util/fluxer";
+import type { SerializeFrom } from "~/util/loader";
+import { type LoaderArgs, useApiLoader, useSafeFetcher } from "~/util/loader";
+import { type Settings, useLocalStorage } from "~/util/localstorage";
+import {
+  base64Decode,
+  base64UrlEncode,
+  copyText,
+  randomString,
+} from "~/util/text";
+import { relativeTime } from "~/util/time";
+import { userIsPremium } from "~/util/users";
+import { snowflakeAsString } from "~/util/zod";
+import type { ApiGetBackupWithData } from "../api/v1/backups.$id";
+import type { loader as ApiGetComponents } from "../api/v1/components";
+import type {
+  ComponentFoundBackupHook,
+  ComponentFoundBackupMap,
+  ComponentFoundBackupStateAction,
+} from "../api/v1/components.$id.backups";
+import { buildStorableComponent } from "./edit.component.$id";
+
+export const loader = async ({ request, context }: LoaderArgs) => {
+  const userId = await getUserId(request, context);
+  let authFailure: string | undefined;
+  const defaultModal = new URL(request.url).searchParams.get("m");
+  if (!userId && defaultModal === "auth-failure") {
+    const storage = getSessionStorage(context);
+    const session = await storage.getSession(request.headers.get("Cookie"));
+    authFailure = session.get("auth:error")?.toString() ?? undefined;
+  }
+
+  return {
+    userId,
+    discordApplicationId: context.env.DISCORD_CLIENT_ID,
+    cdn: context.env.CDN_ORIGIN,
+    debug: {
+      environment: context.env.ENVIRONMENT,
+      version: context.env.VERSION,
+      authFailure,
+      // #100: felt less dirty than just passing the country code by itself,
+      // since we only need to know whether it's spain.
+      // TODO: does this happen in any other countries?
+      spain: request.headers.get("CF-IPCountry") === "ES",
+    },
+  };
+};
+
+export interface DraftFile {
+  id: string;
+  file: File;
+  url?: string;
+}
+
+export interface HistoryItem {
+  id: string;
+  createdAt: Date;
+  data: QueryData;
+}
+
+export const safePushState = (data: any, url?: string | URL | null): void => {
+  // Avoid redundant call. This ignores `data` but we aren't using it for non-`url` state right now
+  if (url && url === location.href) return;
+  try {
+    history.pushState(data, "", url);
+  } catch (e) {
+    if (e instanceof DOMException) {
+      // We were getting errors about insecurity when inputting too quickly
+      // despite only dealing with the same origin, so we just ignore
+      // these and skip the state push.
+      return;
+    }
+    console.log(e);
+  }
+};
+
+export const getQdMessageId = (message: QueryData["messages"][number]) => {
+  // Technically not a unique prop right now
+  // if (message.reference) {
+  //   const match = message.reference.match(MESSAGE_REF_RE);
+  //   if (match) return match[3];
+  // }
+  if (message._id) return message._id;
+  const id = randomString(10);
+  message._id = id;
+  return id;
+};
+
+export const loadMessageComponents = async (
+  data: QueryData,
+  setData: React.Dispatch<QueryData>,
+) => {
+  const allComponentsById = Object.fromEntries(
+    data.messages.flatMap((m) =>
+      extractInteractiveComponents(m.data.components ?? [])
+        .map((c) => {
+          if (!!c.custom_id && /^p_\d+/.test(c.custom_id)) {
+            return [c.custom_id.replace(/^p_/, ""), c];
+          }
+          // We don't really need to load data for link buttons.
+          // This is pretty much just to reduce residue.
+          // @deprecated - we don't assign dhc-id anymore
+          if (c.type === ComponentType.Button && isLinkButton(c)) {
+            try {
+              const url = new URL(c.url);
+              const id = url.searchParams.get("dhc-id");
+              if (id && /\d+/.test(id)) {
+                return [id, c];
+              }
+            } catch {}
+          }
+          return undefined;
+        })
+        .filter((pair): pair is NonNullable<typeof pair> => Boolean(pair)),
+    ),
+  ) as Record<string, APIComponentInMessageActionRow>;
+
+  if (Object.keys(allComponentsById).length !== 0) {
+    const params = new URLSearchParams();
+    for (const id of Object.keys(allComponentsById)) {
+      params.append("id", id);
+    }
+
+    const response = await fetch(`${apiUrl(BRoutes.components())}?${params}`, {
+      method: "GET",
+    });
+    const raw = (await response.json()) as SerializeFrom<
+      typeof ApiGetComponents
+    >;
+    for (const stored of raw) {
+      const local = allComponentsById[stored.id];
+      if (local) {
+        Object.assign(local, buildStorableComponent(stored.data, stored.id));
+      }
+    }
+
+    setData({ ...data });
+  }
+};
+
+const getNewMessageData = (settings: Settings): QueryDataMessageDataRaw => {
+  const data: QueryDataMessageDataRaw = {};
+  if (settings.defaultMessageFlag === "components") {
+    data.flags = MessageFlags.IsComponentsV2;
+  }
+  return data;
+};
+
+const SpainBlockageWarning = ({
+  updateSettings,
+}: {
+  updateSettings: (data: Partial<Settings>) => void;
+}) => (
+  <InfoBox open severity="yellow">
+    🇪🇸 Parece que te encuentras en España. Ten en cuenta que, durante los
+    partidos de La Liga, tu proveedor de servicios de Internet podría bloquear
+    esta página web y otros millones que dependen de Cloudflare.
+    <div className="mt-0.5">
+      <Link
+        to="https://x.com/eastdakota/status/1924969551478804543"
+        target="_blank"
+        className={twMerge(linkClassName, "text-red-400 dark:text-red-500")}
+      >
+        Declaración del director ejecutivo de Cloudflare
+      </Link>{" "}
+      •{" "}
+      <Link
+        to="https://blog.cloudflare.com/es-es/consequences-of-ip-blocking/"
+        target="_blank"
+        className={twMerge(linkClassName, "text-red-400 dark:text-red-500")}
+      >
+        Por qué esto no tiene sentido
+      </Link>{" "}
+      •{" "}
+      <Link
+        to="https://hayahora.futbol/"
+        target="_blank"
+        className={twMerge(linkClassName, "text-red-400 dark:text-red-500")}
+      >
+        Rastreador de interrupciones del servicio
+      </Link>{" "}
+      •{" "}
+      <button
+        type="button"
+        className={twMerge(
+          linkClassName,
+          "contents text-red-400 dark:text-red-500",
+        )}
+        onClick={() => updateSettings({ hideBlockageWarning: true })}
+      >
+        No volver a mostrar este mensaje
+      </button>
+    </div>
+  </InfoBox>
+);
+
+export default function Index() {
+  const { t } = useTranslation();
+  const user = useApiLoader<ApiGetCurrentUser>(BRoutes.currentUser());
+  const { userId, cdn, discordApplicationId, debug } =
+    useLoaderData<typeof loader>();
+
+  const isPremium = user ? userIsPremium(user) : false;
+  const [settings, updateSettings] = useLocalStorage();
+  const cache = useCache(!userId);
+  const [error, setError] = useError(t);
+
+  const [searchParams] = useSearchParams();
+  const dm = searchParams.get("m");
+  const shareId = searchParams.get("share");
+  const backupIdParsed = snowflakeAsString().safeParse(
+    searchParams.get("backup"),
+  );
+
+  // Editor state
+  const [backupId, setBackupId] = useState<bigint>();
+  const [files, setFiles] = useState<Record<string, DraftFile[]>>({});
+  const [data, setData] = useReducer(
+    (_cur: QueryData, d: QueryData) => {
+      const newData = d;
+
+      for (const message of newData.messages) {
+        const foundFileIds: string[] = [];
+        const mid = getQdMessageId(message);
+        for (const attachment of message.data.attachments ?? []) {
+          // Clean up files if they are not matched to any attachments
+          const file = files[mid]?.find((f) => f.id === attachment.id);
+          if (file) foundFileIds.push(file.id);
+
+          // count placements
+          const uri = `attachment://${attachment.filename}`;
+          const hasValidExtension =
+            ATTACHMENT_URI_EXTENSIONS.find((ext) =>
+              attachment.filename.toLowerCase().endsWith(ext),
+            ) !== undefined;
+          if (hasValidExtension) {
+            let placements = 0;
+            for (const embed of message.data.embeds ?? []) {
+              if (embed.author?.icon_url?.trim() === uri) placements += 1;
+              if (embed.image?.url?.trim() === uri) placements += 1;
+              if (embed.thumbnail?.url?.trim() === uri) placements += 1;
+              if (embed.footer?.icon_url?.trim() === uri) placements += 1;
+            }
+            for (const tlc of extractComponentsByType(
+              message.data.components ?? [],
+              [
+                ComponentType.File,
+                ComponentType.MediaGallery,
+                ComponentType.Thumbnail,
+              ],
+            )) {
+              switch (tlc.type) {
+                case ComponentType.File:
+                  if (tlc.file.url.trim() === uri) placements += 1;
+                  break;
+                case ComponentType.MediaGallery:
+                  for (const item of tlc.items) {
+                    if (item.media.url.trim() === uri) placements += 1;
+                  }
+                  break;
+                case ComponentType.Thumbnail:
+                  if (tlc.media.url.trim() === uri) placements += 1;
+                  break;
+                default:
+                  break;
+              }
+            }
+
+            // The existence of references overrides the thumbnail attribute
+            // TODO: people might think this is a bug; improve communication
+            if (placements !== 0 && attachment.is_thumbnail) {
+              attachment.is_thumbnail = false;
+            }
+            attachment.placement_count = placements;
+          }
+        }
+        const removedFiles = files[mid]?.filter(
+          (f) => !foundFileIds.includes(f.id),
+        );
+        files[mid] = files[mid]?.filter((f) => foundFileIds.includes(f.id));
+        if (removedFiles) {
+          for (const file of removedFiles) {
+            if (file.url) URL.revokeObjectURL(file.url);
+          }
+        }
+      }
+      setFiles({ ...files });
+
+      return newData;
+    },
+    {
+      version: "d2",
+      messages: [],
+    },
+  );
+  const [editingComponent, setEditingComponent] =
+    useState<EditingComponentData>();
+  const drag = useDragManager();
+
+  const [rawComponentFoundBackups, setComponentFoundBackups] = useReducer(
+    (
+      prev: ComponentFoundBackupMap,
+      action: ComponentFoundBackupStateAction,
+    ) => {
+      if (action.action === "add") {
+        prev[action.id] = action.value;
+        return { ...prev };
+      }
+      return prev;
+    },
+    {},
+  );
+  // Keep ignorable backup data in rawComponentFoundBackups in case the user
+  // unlinks the backup so that warnings can show for it
+  const componentFoundBackupsHook: ComponentFoundBackupHook = useMemo(() => {
+    if (backupId !== undefined) {
+      const modified = { ...rawComponentFoundBackups };
+      for (const cId of Object.keys(modified)) {
+        if (!modified[cId]) continue;
+        modified[cId] = modified[cId].filter((b) => b.id !== String(backupId));
+      }
+      return [modified, setComponentFoundBackups];
+    }
+    return [rawComponentFoundBackups, setComponentFoundBackups];
+  }, [backupId, rawComponentFoundBackups]);
+
+  const [urlTooLong, setUrlTooLong] = useState(false);
+  const [badShareData, setBadShareData] = useState<InvalidShareIdData>();
+  const [badLoadData, setBadLoadData] = useState<InvalidDataModalProps>();
+
+  const [isLanding, setIsLanding] = useState(
+    // Default message data will be loaded
+    shareId === null &&
+      backupIdParsed.data === undefined &&
+      searchParams.get("data") === null,
+  );
+
+  const [targets, updateTargets] = useReducer(
+    (d: TargetMap, partialD: Partial<TargetMap>) =>
+      ({
+        ...d,
+        ...partialD,
+      }) as TargetMap,
+    {},
+  );
+  // Stable identity across renders where `targets` itself hasn't changed, so
+  // it doesn't update excessively
+  const targetsList = useMemo(() => Object.values(targets), [targets]);
+
+  const [tab, setTab] = useState<"editor" | "preview">(
+    // opened a blank page and not logged in: likely new user.
+    // otherwise, probably wants to jump right into editing.
+    isLanding && userId === null ? "preview" : "editor",
+  );
+
+  const historyNavDataRef = useRef<QueryData | null>(null);
+  const lastDataParamRef = useRef<string | null>(searchParams.get("data"));
+  const lastBackupParamRef = useRef<string | null>(searchParams.get("backup"));
+
+  const loadInitialTargets = useCallback(
+    async (targets: QueryDataTarget[]) => {
+      const cachingGuildIds: string[] = [];
+      for (const target of targets) {
+        switch (target.type) {
+          case undefined:
+          case TargetType.Webhook: {
+            const match = target.url.match(WEBHOOK_URL_RE);
+            if (!match) continue;
+
+            const webhook = await getWebhook(match[1], match[2]);
+            if (webhook.id) {
+              const target: DraftTargetWebhook = {
+                type: TargetType.Webhook,
+                webhook,
+              };
+              updateTargets({ [getTargetKey(target)]: target });
+            }
+            if (
+              webhook.guild_id &&
+              !cachingGuildIds.includes(webhook.guild_id) &&
+              cache
+            ) {
+              cachingGuildIds.push(webhook.guild_id);
+              cache
+                .fetchGuildCacheable(webhook.guild_id)
+                .then(() =>
+                  console.log(
+                    `Cached cacheables for ${webhook.guild_id} (webhook ID ${webhook.id})`,
+                  ),
+                );
+            }
+            break;
+          }
+          case TargetType.FluxerWebhook: {
+            const webhook = await getFluxerWebhook(target.id, target.token);
+            if (webhook.id) {
+              const target: DraftTargetFluxerWebhook = {
+                type: TargetType.FluxerWebhook,
+                id: webhook.id,
+                token: webhook.token,
+                webhook,
+              };
+              updateTargets({ [getTargetKey(target)]: target });
+            }
+            break;
+          }
+          default:
+            break;
+        }
+      }
+    },
+    [cache],
+  );
+
+  const loadDataFromParam = useCallback(
+    (dataParam: string | null) => {
+      console.log("Loading data from param");
+      let parsed:
+        | SafeParseReturnType<QueryData, QueryData>
+        | SafeParseError<QueryData>;
+      try {
+        if (dataParam) {
+          parsed = ZodQueryData.safeParse(
+            JSON.parse(base64Decode(dataParam) ?? "{}"),
+          );
+        } else {
+          parsed = ZodQueryData.safeParse({ messages: [INDEX_MESSAGE] });
+        }
+      } catch (e) {
+        parsed = {
+          success: false,
+          error: { issues: [e] } as ZodError<QueryData>,
+        };
+      }
+
+      document.title = "Discohook";
+      if (parsed.success) {
+        if (parsed.data?.backup_id !== undefined) {
+          setBackupId(BigInt(parsed.data.backup_id));
+        } else {
+          setBackupId(undefined);
+        }
+        const newData: QueryData = { version: "d2", ...parsed.data };
+        historyNavDataRef.current = newData;
+        setData(newData);
+        setBadLoadData(undefined);
+        setUrlTooLong(false);
+        loadInitialTargets(parsed.data.targets ?? []);
+        loadMessageComponents(parsed.data, setData);
+      } else {
+        console.log("QueryData failed parsing:", parsed.error.format());
+        const newData: QueryData = {
+          version: "d2",
+          messages: [INDEX_FAILURE_MESSAGE],
+        };
+        historyNavDataRef.current = newData;
+        setData(newData);
+        setTab("preview");
+        if (dataParam) {
+          setBadLoadData({ raw: dataParam, zodError: parsed.error });
+        }
+      }
+    },
+    [loadInitialTargets],
+  );
+
+  const loadDataFromBackupId = useCallback(
+    async (backupId: bigint) => {
+      console.log(`Loading backup ${backupId}`);
+      const res = await fetch(
+        `${apiUrl(BRoutes.backups(backupId))}?data=true`,
+        { method: "GET" },
+      );
+      if (res.status === 200) {
+        setBackupId(backupId);
+
+        const raw = (await res.json()) as ApiGetBackupWithData;
+        document.title = `${raw.name} - Discohook`;
+        if (!raw.data.messages) {
+          // This shouldn't happen but it could if something was saved wrong
+          raw.data.messages = [];
+        }
+        const newData = {
+          ...raw.data,
+          backup_id: backupId.toString(),
+        };
+        historyNavDataRef.current = newData;
+        setData(newData);
+        loadInitialTargets(newData.targets ?? []);
+        loadMessageComponents(newData, setData);
+      }
+    },
+    [loadInitialTargets],
+  );
+
+  // Get 10 most recently edited backups on the landing page if logged in
+  const meBackupsFetcher = useSafeFetcher<typeof MeBackupsLoader>({
+    onError: setError,
+  });
+  // don't enter failure loop
+  const meBackupsRequested = useRef(false);
+  useEffect(() => {
+    if (
+      isLanding &&
+      userId !== null &&
+      !meBackupsRequested.current &&
+      meBackupsFetcher.state === "idle" &&
+      !meBackupsFetcher.data
+    ) {
+      meBackupsRequested.current = true;
+      meBackupsFetcher.load("/me/backups?limit=10&sort=updatedAt.d");
+    }
+  }, [isLanding, userId, meBackupsFetcher]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Only run once, on page load
+  useEffect(() => {
+    if (shareId) {
+      fetch(`${apiUrl(BRoutes.share(shareId))}?with_new_targets=true`, {
+        method: "GET",
+      }).then((r) => {
+        if (r.status === 200) {
+          r.json().then((d: any) => {
+            const qd: QueryData = d.data;
+            if (!qd.messages) {
+              // This shouldn't happen but it could if something was saved wrong
+              qd.messages = [];
+            }
+            historyNavDataRef.current = qd;
+            setData(qd);
+            loadInitialTargets(qd.targets ?? []);
+            loadMessageComponents(qd, setData);
+          });
+        } else {
+          r.json().then((d: any) => {
+            setBadShareData(d as InvalidShareIdData);
+          });
+        }
+      });
+    } else if (backupIdParsed.success) {
+      loadDataFromBackupId(backupIdParsed.data);
+    } else {
+      loadDataFromParam(searchParams.get("data"));
+    }
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(location.search);
+      const nextDataParam = params.get("data");
+      const nextBackupParam = params.get("backup");
+      // set refs before doing anything with the data
+      let backupChanged = false;
+      let dataChanged = false;
+      if (nextBackupParam !== lastBackupParamRef.current) {
+        lastBackupParamRef.current = nextBackupParam;
+        backupChanged = true;
+      }
+      if (nextDataParam !== lastDataParamRef.current) {
+        lastDataParamRef.current = nextDataParam;
+        dataChanged = true;
+      }
+
+      // prefer backup param (but there shouldn't be any real scenarios where both are present)
+      const nextBackupIdParsed = snowflakeAsString().safeParse(nextBackupParam);
+      if (nextBackupIdParsed.success && backupChanged) {
+        loadDataFromBackupId(nextBackupIdParsed.data);
+      } else if (dataChanged) {
+        loadDataFromParam(nextDataParam);
+      }
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [loadDataFromParam, loadDataFromBackupId]);
+
+  const [localHistory, setLocalHistory] = useState<HistoryItem[]>([]);
+  const [updateCount, setUpdateCount] = useState(-1);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: We want to run this when `data` changes
+  useEffect(() => setUpdateCount((c) => c + 1), [data]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only update when I want
+  useEffect(() => {
+    if (updateCount % 20 === 0) {
+      const lastHistoryItem = localHistory.slice(-1)[0];
+      if (
+        !lastHistoryItem ||
+        JSON.stringify(lastHistoryItem.data) !== JSON.stringify(data)
+      ) {
+        if (data.messages.length > 0) {
+          setLocalHistory(
+            [
+              ...localHistory,
+              {
+                id: randomString(10),
+                createdAt: new Date(),
+                data: structuredClone(data),
+              },
+            ].slice(isPremium ? -30 : -15),
+          );
+        }
+        setUpdateCount(updateCount + 1);
+        if (historyNavDataRef.current !== data && backupId !== undefined) {
+          console.log("Saving backup", backupId);
+          fetch(apiUrl(BRoutes.backups(backupId)), {
+            method: "PATCH",
+            body: JSON.stringify({ data }),
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      }
+    }
+
+    const pathUrl = location.origin + location.pathname;
+    const encoded = base64UrlEncode(JSON.stringify(data));
+    if (backupId === undefined) {
+      // URLs on Cloudflare are limited to 16KB
+      // We might want to lower this even more since the
+      // browser starts to complain at 4,096 bytes
+      const fullUrl = new URL(`${pathUrl}?data=${encoded}`);
+      if (fullUrl.toString().length >= 16000) {
+        setUrlTooLong(true);
+        if (lastDataParamRef.current !== null) {
+          lastDataParamRef.current = null;
+          safePushState({ path: pathUrl }, pathUrl);
+        }
+      } else {
+        setUrlTooLong(false);
+        if (
+          historyNavDataRef.current === data ||
+          encoded === lastDataParamRef.current
+        ) {
+          return;
+        }
+        lastDataParamRef.current = encoded;
+        safePushState({ path: fullUrl.toString() }, fullUrl.toString());
+      }
+    } else {
+      // Make sure it stays there, we also want to wipe any other params
+      setUrlTooLong(false);
+      if (historyNavDataRef.current === data) {
+        return;
+      }
+      const fullUrl = `${pathUrl}?backup=${backupId}`;
+      safePushState({ path: fullUrl.toString() }, fullUrl.toString());
+    }
+  }, [backupId, data, updateCount]);
+  const messagesWithReference = data.messages.filter(
+    (m) => !!m.reference,
+  ).length;
+
+  const [addingTarget, setAddingTarget] = useState(dm === "add-target");
+  const {
+    sending,
+    setShowingResult,
+    resultModal,
+    submitMessages,
+    ...restSubmission
+  } = useMessageSubmissionManager(t, data, setData, files, setError);
+
+  const [settingMessageIndex, setSettingMessageIndex] = useState(
+    dm?.startsWith("set-reference") ? Number(dm.split("-")[2]) : undefined,
+  );
+  const [editingMessageFlags, setEditingMessageFlags] = useState<number>();
+  const [editingAllowedMentions, setEditingAllowedMentions] =
+    useState<number>();
+  const [imageModalData, setImageModalData] = useState<ImageModalProps>();
+  const [authSuccessOpen, setAuthSuccessOpen] = useState(dm === "auth-success");
+  const [authFailureOpen, setAuthFailureOpen] = useState(dm === "auth-failure");
+  const [sendingMessages, setSendingMessages] = useState(dm === "submit");
+  const [sharing, setSharing] = useState(dm === "share-create");
+  const [showBackups, setShowBackups] = useState(dm === "backups");
+  const [editingTargetKey, setEditingTarget] = useState<TargetKey>();
+  const [showHistory, setShowHistory] = useState(dm === "history");
+  const [jsonEditor, setJsonEditor] = useState<JsonEditorProps>();
+  const [codeGenerator, setCodeGenerator] = useState<CodeGeneratorProps>();
+  const [showOrgMigration, setShowOrgMigration] = useState(dm === "org");
+  const [showAddMessageMenu, setShowAddMessageMenu] = useState(false);
+  const [showSendModeModal, setShowModeModal] = useState(dm === "send-mode");
+  const [confirm, setConfirm] = useConfirmModal();
+
+  // Using refs here instead of dividing the viewport width by 2 because I
+  // want to allow changing the size of each pane independently
+  const editorRef = useRef<HTMLDivElement>(null);
+  const [editorWidth, setEditorWidth] = useState(0);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const [previewWidth, setPreviewWidth] = useState(0);
+  useEffect(() => {
+    const callback = () => {
+      if (editorRef.current) setEditorWidth(editorRef.current.clientWidth);
+      if (previewRef.current) setPreviewWidth(previewRef.current.clientWidth);
+    };
+    callback(); // initialize values
+
+    window.addEventListener("resize", callback);
+    return () => window.removeEventListener("resize", callback);
+  }, []);
+  const bounds = useMemo(() => {
+    const getBounds = (w: number) => ({
+      sm: w >= 640,
+      md: w >= 768,
+      lg: w >= 1024,
+      xl: w >= 1280,
+      "2xl": w >= 1536,
+    });
+    return {
+      editor: getBounds(editorWidth),
+      preview: getBounds(previewWidth),
+    };
+  }, [editorWidth, previewWidth]);
+
+  const ua = new UAParser(navigator.userAgent).getResult();
+
+  // Warn users if they can't connect to Discord
+  const [blockTest, setBlockTest] = useState<"success" | "failure">();
+  const performBlockTest = () => {
+    fetch(`${DISCORD_API}/v${DISCORD_API_V}/invites/discord-developers`, {
+      method: "HEAD",
+    })
+      // we don't care about the response itself, just if the promise was
+      // rejected due to being blocked by an extension
+      .then(() => {
+        setBlockTest("success");
+      })
+      .catch(() => {
+        setBlockTest("failure");
+      });
+  };
+  useEffect(performBlockTest, []);
+
+  // This is so awkward
+  const sendButtonKey =
+    settings.webhookInput !== "classic"
+      ? messagesWithReference === 0
+        ? "send"
+        : messagesWithReference === data.messages.length
+          ? "edit"
+          : "submit"
+      : Object.keys(targets).length <= 1 && data.messages.length > 1
+        ? messagesWithReference === 0
+          ? "sendAll"
+          : "submitAll"
+        : Object.keys(targets).length > 1
+          ? messagesWithReference === 0
+            ? "sendToAll"
+            : "submitToAll"
+          : messagesWithReference === 0
+            ? "send"
+            : messagesWithReference === data.messages.length
+              ? "edit"
+              : "submit";
+
+  return (
+    <div className="h-screen overflow-hidden">
+      <ComponentEditModal
+        open={!!editingComponent}
+        setOpen={() => setEditingComponent(undefined)}
+        {...editingComponent}
+        componentFoundBackupsHook={componentFoundBackupsHook}
+        submit={user ? editingComponent?.submit : undefined}
+        cache={cache}
+        // confusing
+        guildId={
+          Object.values(targets).find((t) => t.type === TargetType.Webhook)
+            ?.webhook.guild_id || undefined
+        }
+        isPremium={isPremium}
+      />
+      <MessageSetModal
+        open={settingMessageIndex !== undefined}
+        setOpen={() => setSettingMessageIndex(undefined)}
+        targets={targets}
+        setAddingTarget={setAddingTarget}
+        data={data}
+        setData={setData}
+        messageIndex={settingMessageIndex}
+        cache={cache}
+      />
+      <MessageSendModeModal
+        open={showSendModeModal}
+        setOpen={setShowModeModal}
+        data={data}
+        setSettingMessageIndex={setSettingMessageIndex}
+      />
+      <MessageFlagsEditModal
+        open={editingMessageFlags !== undefined}
+        setOpen={() => setEditingMessageFlags(undefined)}
+        data={data}
+        setData={setData}
+        messageIndex={editingMessageFlags}
+      />
+      <MessageAllowedMentionsModal
+        open={editingAllowedMentions !== undefined}
+        setOpen={() => setEditingAllowedMentions(undefined)}
+        data={data}
+        setData={setData}
+        cache={cache}
+        messageIndex={editingAllowedMentions}
+      />
+      <MessageSendModal
+        open={sendingMessages}
+        setOpen={setSendingMessages}
+        setAddingTarget={setAddingTarget}
+        targets={targets}
+        sending={sending}
+        data={data}
+        cache={cache}
+        messages={restSubmission.messages}
+        updateMessages={restSubmission.updateMessages}
+        setShowingResult={setShowingResult}
+        submitMessages={submitMessages}
+        // Dynamic modal nesting
+        resultModal={
+          settings.webhookInput === "classic" ? undefined : resultModal
+        }
+      />
+      {settings.webhookInput === "classic" ? resultModal : undefined}
+      <TargetEditModal
+        open={editingTargetKey !== undefined}
+        setOpen={() => setEditingTarget(undefined)}
+        targets={targets}
+        updateTargets={updateTargets}
+        targetKey={editingTargetKey}
+        user={user}
+        cache={cache}
+      />
+      <MessageShareModal
+        open={sharing}
+        setOpen={setSharing}
+        targets={targets}
+        data={data}
+      />
+      <MessageBackupsModal
+        open={showBackups}
+        setOpen={setShowBackups}
+        targets={targets}
+        data={data}
+        setData={setData}
+        updateTargets={updateTargets}
+        setBackupId={setBackupId}
+        onBackupLoad={() => {
+          setIsLanding(false);
+        }}
+        user={user}
+        cache={cache}
+      />
+      <JsonEditorModal
+        open={!!jsonEditor}
+        setOpen={() => setJsonEditor(undefined)}
+        {...jsonEditor}
+      />
+      <CodeGeneratorModal
+        open={!!codeGenerator}
+        setOpen={() => setCodeGenerator(undefined)}
+        data={codeGenerator?.data ?? {}}
+      />
+      <HistoryModal
+        open={showHistory}
+        setOpen={setShowHistory}
+        localHistory={localHistory}
+        setLocalHistory={setLocalHistory}
+        setData={setData}
+      />
+      <TargetAddModal
+        open={addingTarget}
+        hasAuthentication={!!userId}
+        setOpen={setAddingTarget}
+        updateTargets={updateTargets}
+        discordApplicationId={discordApplicationId}
+        cache={cache}
+        applyThreadId={(threadId: string) => {
+          for (const message of data.messages) {
+            message.thread_id = threadId;
+          }
+          setData({ ...data });
+        }}
+      />
+      <ShareExpiredModal
+        open={!!badShareData}
+        setOpen={() => setBadShareData(undefined)}
+        data={badShareData}
+      />
+      <InvalidDataModal
+        open={!!badLoadData}
+        setOpen={() => setBadLoadData(undefined)}
+        setData={setData}
+        setTab={setTab}
+        {...badLoadData}
+      />
+      <SimpleTextModal open={showOrgMigration} setOpen={setShowOrgMigration}>
+        <p className="font-medium text-lg mb-2">{t("orgRedirectTitle")}</p>
+        <p>
+          <Trans
+            t={t}
+            i18nKey="orgRedirectBody"
+            components={{
+              bold: <span className="font-semibold" />,
+              importLink: (
+                <Link
+                  to="/me/import-org-backups"
+                  className={linkClassName}
+                  target="_blank"
+                />
+              ),
+              infoLink: (
+                <Link
+                  to="/guide/deprecated/migrate-utils"
+                  className={linkClassName}
+                  target="_blank"
+                />
+              ),
+            }}
+          />
+        </p>
+      </SimpleTextModal>
+      {confirm}
+      <AuthSuccessModal
+        open={authSuccessOpen}
+        setOpen={setAuthSuccessOpen}
+        user={user}
+      />
+      <AuthFailureModal
+        open={authFailureOpen}
+        setOpen={setAuthFailureOpen}
+        message={debug.authFailure}
+      />
+      <ImageModal
+        {...imageModalData}
+        clear={() => setImageModalData(undefined)}
+      />
+      <Header user={user} setShowHistoryModal={setShowHistory} />
+      <div
+        className={twJoin(
+          "h-[calc(100%_-_3rem)]",
+          settings.forceDualPane ? "flex" : "md:flex",
+        )}
+      >
+        <div
+          className={twMerge(
+            "py-4 h-full overflow-y-scroll",
+            settings.forceDualPane
+              ? "w-1/2"
+              : twJoin("md:w-1/2", tab === "editor" ? "" : "hidden md:block"),
+          )}
+          ref={editorRef}
+        >
+          <div className="px-4">
+            {blockTest === "failure" ? (
+              <InfoBox icon="Link_Break" severity="red" open>
+                <Trans
+                  t={t}
+                  i18nKey="discordRequestBlocked"
+                  components={{
+                    bold: <span className="font-semibold" />,
+                    retry: (
+                      <button
+                        type="button"
+                        className="text-start contents text-blue-700 hover:underline"
+                        onClick={performBlockTest}
+                      />
+                    ),
+                  }}
+                />
+              </InfoBox>
+            ) : null}
+            {error}
+            {urlTooLong && (
+              <InfoBox icon="Triangle_Warning" severity="yellow">
+                {t("messageTooLong")}
+              </InfoBox>
+            )}
+            {backupId !== undefined && (
+              <InfoBox icon="Save" collapsible open>
+                {t("editingBackupNote")}
+              </InfoBox>
+            )}
+            {debug.spain && !settings.hideBlockageWarning ? (
+              <SpainBlockageWarning updateSettings={updateSettings} />
+            ) : null}
+            <div className="flex">
+              <div
+                className={twJoin(
+                  "flex mb-2 flex-wrap gap-x-2 gap-y-1 me-2",
+                  isLanding ? "hidden" : undefined,
+                )}
+              >
+                <Button
+                  onClick={() => setSharing(true)}
+                  discordstyle={ButtonStyle.Secondary}
+                  disabled={data.messages.length === 0}
+                >
+                  {t("share")}
+                </Button>
+                <Button
+                  onClick={() => setShowBackups(true)}
+                  discordstyle={ButtonStyle.Secondary}
+                >
+                  {t("backups")}
+                </Button>
+                <Button
+                  onClick={() =>
+                    setConfirm({
+                      title: t("resetEditor"),
+                      children: (
+                        <>
+                          <p>
+                            {t("resetEditorConfirm", {
+                              count: data.messages.length,
+                            })}
+                          </p>
+                          <p className="text-muted dark:text-muted-dark text-sm font-medium mt-1">
+                            <Trans
+                              t={t}
+                              i18nKey="resetEditorFootnote"
+                              components={[
+                                <button
+                                  key="0"
+                                  type="button"
+                                  className={twJoin(linkClassName, "contents")}
+                                  onClick={() => {
+                                    setShowHistory(true);
+                                    setConfirm(undefined);
+                                  }}
+                                />,
+                              ]}
+                            />
+                          </p>
+                          <ModalFooter className="flex gap-2">
+                            <Button
+                              className="ms-auto"
+                              onClick={() => {
+                                setData({
+                                  messages: [
+                                    { data: getNewMessageData(settings) },
+                                  ],
+                                  targets: undefined,
+                                });
+                                setConfirm(undefined);
+                                setIsLanding(false);
+                              }}
+                              discordstyle={ButtonStyle.Danger}
+                            >
+                              {t("resetEditor")}
+                            </Button>
+                            <Button
+                              onClick={() => setConfirm(undefined)}
+                              discordstyle={ButtonStyle.Secondary}
+                            >
+                              {t("cancel")}
+                            </Button>
+                          </ModalFooter>
+                        </>
+                      ),
+                    })
+                  }
+                  discordstyle={ButtonStyle.Secondary}
+                >
+                  {t("resetEditor")}
+                </Button>
+              </div>
+              <Button
+                className={twJoin(
+                  "ms-auto",
+                  settings.forceDualPane ? "hidden" : "md:hidden",
+                  isLanding ? "mb-2" : undefined,
+                )}
+                onClick={() => setTab("preview")}
+                discordstyle={ButtonStyle.Secondary}
+              >
+                {t("preview")}{" "}
+                <CoolIcon icon="Chevron_Right" rtl="Chevron_Left" />
+              </Button>
+            </div>
+            {Object.entries(targets).map(([targetKey, target]) => {
+              const info = getGenericTargetInfo(target, discordApplicationId);
+              return (
+                <div
+                  key={`target-${targetKey}`}
+                  className="rounded-lg py-2 px-3 mb-2 bg-gray-100 dark:bg-[#1E1F22]/30 border border-transparent dark:border-[#1E1F22] flex"
+                >
+                  <div className="relative me-3">
+                    <img
+                      {...info.avatar}
+                      className="rounded-full my-auto size-8"
+                      alt=""
+                    />
+                    {target.type === TargetType.FluxerWebhook ? (
+                      <FluxerLogo className="text-[#F5F4FC] size-4 rounded-full bg-fluxer absolute -bottom-0.5 -end-0.5" />
+                    ) : null}
+                  </div>
+                  <div className="truncate my-auto">
+                    <div className="flex max-w-full">
+                      <p className="font-semibold truncate dark:text-primary-230 text-lg">
+                        <span className="align-baseline">{info.name}</span>
+                        {info.checkmark ? (
+                          <span
+                            className="ms-1 inline-block"
+                            title={t("createdByDiscohook")}
+                          >
+                            <CoolIcon
+                              icon="Circle_Check"
+                              className="text-blurple-500 dark:text-blurple-400"
+                            />
+                          </span>
+                        ) : null}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="ms-auto space-x-2 rtl:space-x-reverse my-auto shrink-0 text-xl">
+                    <button
+                      type="button"
+                      title={t("editResource", { replace: [info.name] })}
+                      onClick={() => setEditingTarget(targetKey as TargetKey)}
+                    >
+                      <CoolIcon icon="Edit_Pencil_01" />
+                    </button>
+                    <button
+                      type="button"
+                      title={t("removeResource", { replace: [info.name] })}
+                      onClick={() => {
+                        delete targets[targetKey as TargetKey];
+                        updateTargets({ ...targets });
+                      }}
+                    >
+                      <CoolIcon icon="Trash_Full" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {!isLanding ? (
+              <>
+                {settings.webhookInput === "classic" && (
+                  <div className="flex mb-2">
+                    <div className="grow">
+                      <TextInput
+                        className="w-full text-base"
+                        onChange={async ({ currentTarget }) => {
+                          setError(undefined);
+                          const { value } = currentTarget;
+                          if (!value.trim()) return;
+
+                          const webhookMatch = WEBHOOK_URL_RE.exec(value);
+                          if (webhookMatch) {
+                            const live = await getWebhook(
+                              webhookMatch[1],
+                              webhookMatch[2],
+                            );
+                            if (live.id) {
+                              const target: DraftTargetWebhook = {
+                                type: TargetType.Webhook,
+                                webhook: live,
+                              };
+                              const targetKey = getTargetKey(target);
+                              if (
+                                cache &&
+                                live.guild_id &&
+                                !targets[targetKey]
+                              ) {
+                                cache.fetchGuildCacheable(live.guild_id);
+                              }
+                              updateTargets({ [targetKey]: target });
+                              currentTarget.value = "";
+                            } else if ("message" in live) {
+                              setError({ message: live.message as string });
+                            }
+                            return;
+                          }
+                          const fluxerWebhookMatch =
+                            FLUXER_WEBHOOK_URL_RE.exec(value);
+                          if (fluxerWebhookMatch) {
+                            const live = await getFluxerWebhook(
+                              fluxerWebhookMatch[1],
+                              fluxerWebhookMatch[2],
+                            );
+                            if (live.id) {
+                              const target: DraftTargetFluxerWebhook = {
+                                type: TargetType.FluxerWebhook,
+                                id: live.id,
+                                token: live.token,
+                                webhook: live,
+                              };
+                              updateTargets({ [getTargetKey(target)]: target });
+                              currentTarget.value = "";
+                            } else if ("message" in live) {
+                              setError({ message: live.message as string });
+                            }
+                            return;
+                          }
+
+                          setError({ code: "invalidWebhookUrl" });
+                        }}
+                        placeholder="https://discord.com/api/webhooks/..."
+                      />
+                    </div>
+                  </div>
+                )}
+                <div className="flex gap-x-2">
+                  {settings.webhookInput !== "classic" && (
+                    <Button
+                      onClick={() => setAddingTarget(true)}
+                      disabled={Object.keys(targets).length >= 10}
+                    >
+                      {t("addTarget.1")}
+                    </Button>
+                  )}
+                  <div className="flex gap-0">
+                    <Button
+                      disabled={data.messages.length === 0 || sending}
+                      className="rounded-e-none border-e-0"
+                      loading={sending}
+                      onClick={async () => {
+                        if (settings.webhookInput !== "classic") {
+                          setSendingMessages(true);
+                          return;
+                        }
+                        const results = await submitMessages(
+                          Object.values(targets),
+                        );
+                        const errors = results.filter(
+                          (r) => r.status === "error",
+                        );
+                        if (errors.length === 1) {
+                          setShowingResult(errors[0]);
+                        } else if (errors.length !== 0) {
+                          setSendingMessages(true);
+                        }
+                      }}
+                    >
+                      {t(sendButtonKey)}
+                    </Button>
+                    <ButtonSelect
+                      className="w-7 min-w-0 px-0 rounded-s-none"
+                      iconClassName="ms-0"
+                      options={[
+                        {
+                          value: "",
+                          label: t(
+                            sendButtonKey.startsWith("edit") ? "send" : "edit",
+                          ),
+                        },
+                      ]}
+                      onValueChange={() => {
+                        if (data.messages.length === 1) {
+                          setSettingMessageIndex(0);
+                        } else {
+                          setShowModeModal(true);
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </div>
+          {isLanding ? (
+            <div className="px-4">
+              <div
+                className={twJoin(
+                  "flex gap-2",
+                  bounds.editor.sm ? "flex-row" : "flex-col",
+                )}
+              >
+                <RadioishBox
+                  isSelected={false}
+                  onSelect={() => setIsLanding(false)}
+                  name={t("defaultPrompt.standard.name")}
+                  description={t("defaultPrompt.standard.description")}
+                  className={twJoin(
+                    "bg-gray-100 hover:border-blurple",
+                    bounds.editor.sm ? "w-1/3" : "w-full",
+                  )}
+                />
+                <RadioishBox
+                  isSelected={false}
+                  onSelect={() => {
+                    setIsLanding(false);
+                    if (!data.messages[0]) return;
+
+                    data.messages[0].data = convertMessageToComponents(
+                      data.messages[0].data,
+                    );
+                    setData({ ...data });
+                  }}
+                  name={t("defaultPrompt.components.name")}
+                  description={t("defaultPrompt.components.description")}
+                  className={twJoin(
+                    "bg-gray-100 hover:border-blurple relative",
+                    bounds.editor.sm ? "w-1/3" : "w-full",
+                  )}
+                >
+                  <div className="absolute -top-1 -right-1 rounded-full bg-blurple text-white font-bold text-xs px-2 py-0.5 uppercase">
+                    {t("new")}
+                  </div>
+                </RadioishBox>
+                <RadioishBox
+                  isSelected={false}
+                  onSelect={() => {
+                    data.messages = [{ data: getNewMessageData(settings) }];
+                    setData({ ...data });
+                    setIsLanding(false);
+                  }}
+                  name={t("defaultPrompt.blank.name")}
+                  description={t("defaultPrompt.blank.description")}
+                  className={twJoin(
+                    "bg-gray-100 hover:border-blurple",
+                    bounds.editor.sm ? "w-1/3" : "w-full",
+                  )}
+                />
+              </div>
+              {userId !== null ? (
+                <div className="mt-2">
+                  <p className="font-medium text-base">
+                    {t("defaultPrompt.loadBackupTitle")}
+                  </p>
+                  {meBackupsFetcher.state === "loading" ? (
+                    <div className="space-y-1.5">
+                      <SkeletonBackup />
+                      <SkeletonBackup />
+                      <SkeletonBackup />
+                      <SkeletonBackup />
+                      <SkeletonBackup />
+                    </div>
+                  ) : meBackupsFetcher.data ? (
+                    <div className="space-y-1.5">
+                      {meBackupsFetcher.data.backups.map((backup) => (
+                        <button
+                          key={`index-${backup.id}`}
+                          type="button"
+                          className={twJoin(
+                            "border border-border-normal dark:border-border-normal-dark bg-gray-100 dark:bg-gray-800",
+                            "hover:border-blurple",
+                            "rounded-lg w-full px-3 py-2.5 flex items-center transition-colors relative",
+                          )}
+                          onClick={async () => {
+                            const res = await fetch(
+                              `${apiUrl(BRoutes.backups(backup.id))}?data=true`,
+                              { method: "GET" },
+                            );
+                            if (!res.ok) {
+                              setError({ message: "Failed to load backup" });
+                              return;
+                            }
+                            const loadedBackup =
+                              (await res.json()) as ApiGetBackupWithData;
+                            document.title = `${backup.name} - Discohook`;
+                            setData({
+                              ...loadedBackup.data,
+                              // Just in case
+                              backup_id: backup.id.toString(),
+                            });
+                            setTargets(
+                              targets,
+                              updateTargets,
+                              loadedBackup.data.targets,
+                              cache,
+                            );
+                            loadMessageComponents(loadedBackup.data, setData);
+                            setBackupId(backup.id);
+                            setIsLanding(false);
+                          }}
+                        >
+                          <div className="cursor-default me-2">
+                            <Avatar.Root>
+                              {backup.previewImageUrl ? (
+                                <Avatar.Image
+                                  src={backup.previewImageUrl}
+                                  className="object-cover size-7 rounded aspect-square"
+                                />
+                              ) : null}
+                              <Avatar.Fallback className="size-7 flex rounded bg-blurple">
+                                <CoolIcon
+                                  icon="File_Document"
+                                  className="m-auto text-lg text-gray-50"
+                                />
+                              </Avatar.Fallback>
+                            </Avatar.Root>
+                          </div>
+                          <p className="truncate">{backup.name}</p>
+                          {backup.updatedAt ? (
+                            <p
+                              className="ms-auto text-sm text-muted dark:text-muted-dark"
+                              title={new Date(
+                                backup.updatedAt,
+                              ).toLocaleDateString()}
+                            >
+                              {relativeTime(new Date(backup.updatedAt), t)}
+                            </p>
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  <Button
+                    className="mt-1.5"
+                    onClick={() => setShowBackups(true)}
+                    discordstyle={ButtonStyle.Secondary}
+                  >
+                    {t("defaultPrompt.allBackups")}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            data.messages.map((d, i) => {
+              const id = getQdMessageId(d);
+              return (
+                <MessageEditor
+                  key={`edit-message-${id}`}
+                  index={i}
+                  data={data}
+                  files={files[id] ?? []}
+                  discordApplicationId={discordApplicationId}
+                  setData={setData}
+                  setFiles={(newF) =>
+                    setFiles({ ...files, [id]: newF as DraftFile[] })
+                  }
+                  setSettingMessageIndex={setSettingMessageIndex}
+                  setEditingMessageFlags={setEditingMessageFlags}
+                  setEditingAllowedMentions={setEditingAllowedMentions}
+                  setJsonEditor={setJsonEditor}
+                  setCodeGenerator={setCodeGenerator}
+                  targets={Object.values(targets)}
+                  setEditingComponent={setEditingComponent}
+                  componentFoundBackupsHook={componentFoundBackupsHook}
+                  drag={drag}
+                  cache={cache}
+                  cdn={cdn}
+                />
+              );
+            })
+          )}
+          <div className="px-4">
+            {!isLanding ? (
+              <Dialog.Root
+                open={showAddMessageMenu}
+                onOpenChange={setShowAddMessageMenu}
+              >
+                <Dialog.Trigger
+                  disabled={data.messages.length >= 10}
+                  onClick={(e) => {
+                    if (e.shiftKey) {
+                      // doesn't seem to do anything (for our use case)?
+                      e.preventBaseUIHandler();
+                      setShowAddMessageMenu(false);
+
+                      data.messages.push({
+                        data: getNewMessageData(settings),
+                      });
+                      setData({ ...data });
+                    }
+                  }}
+                  render={
+                    <Button
+                      className="mt-4 w-full"
+                      disabled={data.messages.length >= 10}
+                    >
+                      <div className="flex">
+                        <PostChannelIcon className="size-5 my-auto me-1" />
+                        <span className="my-auto">{t("addMessage")}</span>
+                      </div>
+                    </Button>
+                  }
+                />
+                <DialogPortal className="flex flex-col gap-y-2">
+                  <button
+                    className={twJoin(
+                      "rounded-lg bg-gray-200 dark:bg-gray-800 py-4 px-6 gap-4 flex text-start",
+                      "border border-gray-300 dark:border-gray-700 hover:border-blurple",
+                      "shadow hover:shadow-md transition",
+                    )}
+                    type="button"
+                    onClick={() => {
+                      data.messages.push({ data: {} });
+                      setData({ ...data });
+                      setShowAddMessageMenu(false);
+                    }}
+                  >
+                    <CoolIcon icon="Text" className="my-auto text-4xl" />
+                    <div className="my-auto">
+                      <p className="font-semibold text-lg">
+                        {t("standardMessage")}
+                      </p>
+                      <p className="text-muted dark:text-muted-dark">
+                        {t("standardMessageDescription")}
+                      </p>
+                    </div>
+                  </button>
+                  <button
+                    className={twJoin(
+                      "rounded-lg bg-gray-200 dark:bg-gray-800 py-4 px-6 gap-4 flex text-start",
+                      "border border-gray-300 dark:border-gray-700 hover:border-blurple",
+                      "shadow hover:shadow-md transition relative",
+                    )}
+                    type="button"
+                    onClick={() => {
+                      data.messages.push({
+                        data: { flags: MessageFlags.IsComponentsV2 },
+                      });
+                      setData({ ...data });
+                      setShowAddMessageMenu(false);
+                    }}
+                  >
+                    <CoolIcon icon="Rows" className="my-auto text-4xl" />
+                    <div className="my-auto">
+                      <p className="font-semibold text-lg">
+                        {t("componentsMessage")}
+                      </p>
+                      <p className="text-muted dark:text-muted-dark">
+                        {t("componentsMessageDescription")}
+                      </p>
+                    </div>
+                    <div className="absolute -top-1 -right-1 rounded-full bg-blurple text-white font-bold text-xs px-2 py-0.5 uppercase">
+                      {t("new")}
+                    </div>
+                  </button>
+                </DialogPortal>
+              </Dialog.Root>
+            ) : null}
+            <hr className="border border-gray-400 dark:border-gray-600 my-6" />
+            <div className="grayscale hover:grayscale-0 group flex text-sm opacity-60 hover:opacity-100 transition-opacity">
+              <div className="mb-auto mt-1 ms-2">
+                <Logo pink={isPremium} />
+              </div>
+              <div className="ms-6">
+                <p>
+                  Discohook is brought to you free of charge by me (shay) and a
+                  history of contributors.{" "}
+                  <Link
+                    to="/donate"
+                    target="_blank"
+                    className="underline hover:no-underline"
+                  >
+                    Consider donating
+                  </Link>{" "}
+                  if you would like to support the project.
+                </p>
+                <hr className="border-gray-400 dark:border-gray-600 mb-1 mt-2" />
+                <button
+                  type="button"
+                  className="text-muted dark:text-muted-dark text-xs text-start"
+                  title={t("clickToCopy")}
+                  onClick={(e) => copyText(e.currentTarget.textContent ?? "")}
+                >
+                  Discohook {debug.version.id.split("-")[0]}
+                  {debug.environment === "production"
+                    ? ""
+                    : ` (${debug.environment})`}
+                  {"\n"}
+                  <br />
+                  {ua.browser.name} {ua.browser.version} ({ua.engine.name})
+                  {"\n"}
+                  <br />
+                  {ua.os.name} {ua.os.version}
+                </button>
+                <hr className="border-gray-400 dark:border-gray-600 mt-1 mb-2" />
+                <p className="flex flex-wrap gap-2">
+                  <Link
+                    to="/bot"
+                    className="underline hover:no-underline"
+                    target="_blank"
+                  >
+                    {t("inviteBot")}
+                  </Link>
+                  <a
+                    href="https://github.com/discohook/discohook"
+                    className="underline hover:no-underline"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    GitHub
+                  </a>
+                  <a
+                    href="https://docs.discohook.app"
+                    className="underline hover:no-underline"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    API
+                  </a>
+                  {location.hostname === "discohook.app" && (
+                    <span>Email: "hello" at {location.hostname}</span>
+                  )}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div
+          className={twMerge(
+            "h-full flex-col",
+            "border-s-gray-400 dark:border-s-[#1E1F22]",
+            settings.forceDualPane
+              ? "flex w-1/2 border-s-2"
+              : twJoin(
+                  "md:w-1/2 md:border-s-2",
+                  tab === "preview" ? "flex" : "hidden md:flex",
+                ),
+          )}
+          ref={previewRef}
+        >
+          <div className="overflow-y-scroll grow p-4 pb-8">
+            <div className={settings.forceDualPane ? "hidden" : "md:hidden"}>
+              <Button
+                onClick={() => setTab("editor")}
+                discordstyle={ButtonStyle.Secondary}
+              >
+                <CoolIcon icon="Chevron_Left" rtl="Chevron_Right" />{" "}
+                {t("editor")}
+              </Button>
+              <hr className="border border-gray-400 dark:border-gray-600 my-4" />
+            </div>
+            {data.messages.map((message, i) => {
+              const mid = getQdMessageId(message);
+              return (
+                <Message
+                  key={`preview-message-${mid}`}
+                  message={message.data}
+                  cache={cache}
+                  discordApplicationId={discordApplicationId}
+                  targets={targetsList}
+                  previousMessageData={data.messages[i - 1]?.data}
+                  threadId={message.thread_id}
+                  setImageModalData={setImageModalData}
+                  messageDisplay={settings.messageDisplay}
+                  compactAvatars={settings.compactAvatars}
+                  cdn={cdn}
+                />
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const SkeletonBackup = () => (
+  <div
+    className={twJoin(
+      "animate-pulse",
+      "border border-border-normal dark:border-border-normal-dark bg-gray-100 dark:bg-gray-800",
+      "rounded-lg w-full px-3 py-2.5 flex items-center relative",
+    )}
+  >
+    <div className="me-2 size-7 rounded bg-blurple" />
+    <div className="rounded-full bg-gray-300 dark:bg-gray-600 h-4 w-28" />
+  </div>
+);
