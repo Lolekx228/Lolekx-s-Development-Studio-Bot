@@ -1114,7 +1114,7 @@ export const SettingsModal = (props: ModalProps & { user?: User | null }) => {
         </div>
         <div className="mt-4 md:mt-auto">
           <p className="text-muted dark:text-muted-dark text-xs">
-            LDS Studio · AGPL v3+
+            LDS · AGPL v3+
           </p>
         </div>
       </div>
