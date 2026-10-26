@@ -127,12 +127,12 @@ const TailwindThemeScript = () => (
 export const FullscreenThrobber = () => (
   <div className="h-screen w-full flex absolute top-0 left-0">
     <img
-      src=`${import.meta.env.BASE_URL}logos/icon-light.svg`
+      src={`${import.meta.env.BASE_URL}logos/icon-light.svg`}
       alt="Discohook"
       className="h-32 animate-pulse m-auto block dark:hidden"
     />
     <img
-      src=`${import.meta.env.BASE_URL}logos/icon.svg`
+      src={`${import.meta.env.BASE_URL}logos/icon.svg`}
       alt="Discohook"
       className="h-32 animate-pulse m-auto hidden dark:block"
     />
@@ -415,7 +415,7 @@ export function ErrorBoundary() {
           <div className="p-8 max-w-3xl mx-auto flex items-start">
             <img
               className="size-14 hidden sm:block me-4"
-              src=`${import.meta.env.BASE_URL}logos/icon.svg`
+              src={`${import.meta.env.BASE_URL}logos/icon.svg`}
               alt=""
             />
             {data.code === RESTJSONErrorCodes.MissingAccess ||

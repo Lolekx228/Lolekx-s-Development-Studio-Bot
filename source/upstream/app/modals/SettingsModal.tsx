@@ -251,7 +251,7 @@ const FilehostConfigurationImgbb = ({
       t={t}
       id={id}
       name="ImgBB"
-      iconUrl=`${import.meta.env.BASE_URL}logos/imgbb.png`
+      iconUrl={`${import.meta.env.BASE_URL}logos/imgbb.png`}
       clearConfig={async () => {
         const res = await fetch(apiUrl(BRoutes.filehostsConfig(id)), {
           method: "POST",
@@ -360,7 +360,7 @@ const FilehostConfigurationPostimages = ({
       t={t}
       id={id}
       name="Postimages"
-      iconUrl=`${import.meta.env.BASE_URL}logos/postimages.png`
+      iconUrl={`${import.meta.env.BASE_URL}logos/postimages.png`}
       clearConfig={async () => {
         updateSettings({ filehosts: { ...fh, [id]: undefined } });
       }}
@@ -401,7 +401,7 @@ const FilehostConfigurationSxcu = ({
       t={t}
       id={id}
       name="sxcu"
-      iconUrl=`${import.meta.env.BASE_URL}logos/sxcu.png`
+      iconUrl={`${import.meta.env.BASE_URL}logos/sxcu.png`}
       clearConfig={async () => {
         updateSettings({ filehosts: { ...fh, [id]: undefined } });
       }}
@@ -506,7 +506,7 @@ const FilehostConfigurationSxcu = ({
 //       t={t}
 //       id="catbox"
 //       name="Catbox"
-//       iconUrl=`${import.meta.env.BASE_URL}logos/catbox.png`
+//       iconUrl={`${import.meta.env.BASE_URL}logos/catbox.png`}
 //       clearConfig={async () => {
 //         const res = await fetch(apiUrl(BRoutes.filehostsConfig("catbox")), {
 //           method: "POST",
@@ -615,7 +615,7 @@ const FilehostConfigurationSxcu = ({
 //       t={t}
 //       id={id}
 //       name="sxcu.net"
-//       iconUrl=`${import.meta.env.BASE_URL}logos/sxcu.png`
+//       iconUrl={`${import.meta.env.BASE_URL}logos/sxcu.png`}
 //       clearConfig={async () => {
 //         const res = await fetch(apiUrl(BRoutes.filehostsConfig(id)), {
 //           method: "POST",
@@ -992,7 +992,7 @@ const tabs: {
                     )}
                   >
                     <img
-                      src={`/logos/${filehost.id}.png`}
+                      src={`${import.meta.env.BASE_URL}logos/${filehost.id}.png`}
                       alt={`${filehost.name} logo`}
                       className="size-7 m-auto object-contain rounded-md"
                     />
@@ -1114,7 +1114,7 @@ export const SettingsModal = (props: ModalProps & { user?: User | null }) => {
         </div>
         <div className="mt-4 md:mt-auto">
           <p className="text-muted dark:text-muted-dark text-xs">
-            {t("settingsFooter")}
+            LDS Studio · AGPL v3+
           </p>
         </div>
       </div>

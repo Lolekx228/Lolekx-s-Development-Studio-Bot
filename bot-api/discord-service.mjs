@@ -1,4 +1,5 @@
 import {createDelivery} from './delivery.mjs';
+import componentActions from './component-actions.cjs';
 import embedCore from './embed-core.cjs';
 const API = 'https://discord.com/api/v10';
 
@@ -114,12 +115,12 @@ export function preparePayload(input, pings = false, options = {}) {
   const flags = (v2 || (Number(input.flags)&32768) ? 32768 : 0) | (Number(input.flags) & (4|4096)); if (flags) out.flags = flags;
   return out;
 }
-const delivery=createDelivery({discord,preparePayload,requireGuild,ApiError});
+const delivery=createDelivery({discord,preparePayload,requireGuild,ApiError,actions:componentActions});
 export async function handleDiscord(request, env, user) {
   try {
     authorize(user, env);
     const url = new URL(request.url), path = url.pathname.replace(/^\/api\/discord/, '');
-    if (request.method === 'GET' && path === '/connection') { const [bot, servers] = await Promise.all([discord(env, '/users/@me'), guilds(env)]); return json({ bot: { id: bot.id, name: bot.global_name || bot.username }, guilds: servers }); }
+    if (request.method === 'GET' && path === '/connection') { const [bot, servers] = await Promise.all([discord(env, '/users/@me'), guilds(env)]); return json({ bot: { id: bot.id, name: bot.global_name || bot.username }, guilds: servers, capabilities: {component_actions:true} }); }
     if (request.method === 'GET' && path === '/channels') return json({ channels: await channels(env, url.searchParams.get('guild_id')) });
     if(request.method==='GET'&&path==='/messages')return json(await delivery.load(env,url.searchParams.get('channel_id'),url.searchParams.get('message_id')));
     if(request.method==='POST'&&path==='/messages'){

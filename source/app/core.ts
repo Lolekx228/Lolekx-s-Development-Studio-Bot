@@ -27,7 +27,7 @@ export function cleanPayload(data:any,files:any[]=[]){
  const strip=(value:any):any=>{
   if(Array.isArray(value))return value.map(strip);
   if(!object(value))return value;
-  return Object.fromEntries(Object.entries(value).filter(([k])=>!['_id','flow','flows'].includes(k)).map(([k,v])=>[k,strip(v)]));
+  return Object.fromEntries(Object.entries(value).filter(([k])=>k!=='_id').map(([k,v])=>[k,strip(v)]));
  };
  const result=strip(copy);
  delete result.author;
@@ -38,6 +38,8 @@ export function cleanPayload(data:any,files:any[]=[]){
  if(result.embeds?.length)result.embeds=embedCore.prepare(result.embeds);
  return result;
 }
+export function hasActions(value:any):boolean {if(!value||typeof value!=='object')return false;if(value.flow?.actions?.length||value.flows&&Object.values(value.flows).some((v:any)=>v?.actions?.length))return true;return Object.values(value).some(hasActions);}
+export function stripActions(value:any):any {if(Array.isArray(value))return value.map(stripActions);if(!value||typeof value!=='object')return value;return Object.fromEntries(Object.entries(value).filter(([k])=>k!=='flow'&&k!=='flows').map(([k,v])=>[k,stripActions(v)]));}
 export function validateWebhook(value:string){const url=new URL(value);if(url.protocol!=='https:'||!['discord.com','canary.discord.com','ptb.discord.com','discordapp.com'].includes(url.hostname)||!/^\/api(?:\/v\d+)?\/webhooks\/\d+\/[\w-]+\/?$/.test(url.pathname))throw Error('Нужна HTTPS-ссылка webhook Discord.');url.hash='';return url;}
 export function attachmentPayload(message:any,allFiles:any[],mode:string){
  const attached=message.data.attachments||[];

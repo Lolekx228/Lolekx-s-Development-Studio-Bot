@@ -10,3 +10,4 @@ source/.yarn/install-state.gz
 
 source/node_modules/
 source/.vite/
+/data/

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {blank,normalize,importBackups,encode,decode,draftOnly,cleanPayload,attachmentPayload,validateWebhook} from '../app/core.ts';
+import {blank,normalize,importBackups,encode,decode,draftOnly,cleanPayload,attachmentPayload,validateWebhook,hasActions,stripActions} from '../app/core.ts';
 test('imports d2 and classic message drafts without dropping embeds, buttons or extra messages',()=>{
  const source={version:'d2',messages:[{data:{content:'Привет',embeds:[{author:{name:'Автор'}}],components:[{type:1,components:[{type:2,style:5,url:'https://example.com',label:'Ссылка'}]}]}},{data:{flags:32768,components:[{type:10,content:'V2'}]}}]};
  const result=normalize(source);assert.equal(result.messages.length,2);assert.deepEqual(result.messages[0].data,source.messages[0].data);assert.notEqual(result.messages[0],source.messages[0]);
@@ -14,9 +14,10 @@ test('share round trips Unicode and excludes webhook targets and credentials met
  const value={messages:[{data:{content:'Привет 👀'},targets:[{url:'secret'}],webhook:'secret'}],targets:[{url:'secret'}]};
  assert.deepEqual(decode(encode(draftOnly(value))),draftOnly(value));assert.ok(!JSON.stringify(draftOnly(value)).includes('secret'));
 });
-test('wire payload preserves embed authors and strips only editor metadata',()=>{
+test('bot wire preserves component actions and embed authors, webhook strip is explicit',()=>{
  const value=cleanPayload({content:'Test',author:{badge:'fake'},embeds:[{author:{name:'Имя'}}],components:[{type:1,components:[{type:2,style:1,custom_id:'own_handler',flow:{actions:[]}}]}],_id:'internal'});
- assert.equal(value.embeds[0].author.name,'Имя');assert.ok(!value.author);assert.ok(!value._id);assert.equal(value.components[0].components[0].custom_id,'own_handler');assert.ok(!value.components[0].components[0].flow);
+ assert.equal(value.embeds[0].author.name,'Имя');assert.ok(!value.author);assert.ok(!value._id);assert.equal(value.components[0].components[0].custom_id,'own_handler');assert.deepEqual(value.components[0].components[0].flow,{actions:[]});
+ const payload={components:[{type:1,components:[{type:2,style:1,flow:{actions:[{type:3,roleId:'12345678901234567'}]}}]}]};assert.equal(hasActions(payload),true);assert.equal(hasActions(stripActions(payload)),false);assert.ok(payload.components[0].components[0].flow);
 });
 test('empty, oversized and mixed V2 messages fail before transmission',()=>{
  assert.throws(()=>cleanPayload({}));assert.throws(()=>cleanPayload({content:'x'.repeat(2001)}));
